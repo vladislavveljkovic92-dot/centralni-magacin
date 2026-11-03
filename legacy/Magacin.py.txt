@@ -1,0 +1,1109 @@
+import tkinter as tk
+from tkinter import ttk, messagebox, simpledialog
+import sqlite3
+import datetime
+import os
+
+DB_NAME = "magacin.db"
+
+# ==========================================
+# 1. BAZA PODATAKA (Autopatch)
+# ==========================================
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    
+    # Osnovne tabele
+    c.execute('''CREATE TABLE IF NOT EXISTS delovi (id INTEGER PRIMARY KEY AUTOINCREMENT, part_number TEXT UNIQUE, naziv TEXT, namena TEXT DEFAULT 'Univerzalno', kategorija TEXT, stanje INTEGER, min_stanje INTEGER, max_stanje INTEGER, cena REAL, dobavljac TEXT, slika_putanja TEXT DEFAULT '')''')
+    c.execute('''CREATE TABLE IF NOT EXISTS transakcije (id INTEGER PRIMARY KEY AUTOINCREMENT, part_id INTEGER, kolicina INTEGER, tip TEXT, korisnik TEXT, datum DATETIME, napomena TEXT, FOREIGN KEY(part_id) REFERENCES delovi(id))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS podesavanja (kljuc TEXT PRIMARY KEY, vrednost TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS korisnici (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT, uloga TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS radni_nalozi (id INTEGER PRIMARY KEY AUTOINCREMENT, rn_broj TEXT UNIQUE, status TEXT, datum DATETIME, napomena TEXT, korisnik TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS rn_stavke (id INTEGER PRIMARY KEY AUTOINCREMENT, rn_id INTEGER, part_id INTEGER, kolicina INTEGER, FOREIGN KEY(rn_id) REFERENCES radni_nalozi(id), FOREIGN KEY(part_id) REFERENCES delovi(id))''')
+    
+    # PM Tabele
+    c.execute('''CREATE TABLE IF NOT EXISTS pm_linije (id INTEGER PRIMARY KEY AUTOINCREMENT, naziv TEXT UNIQUE, opis TEXT, ikona TEXT DEFAULT '🏭')''')
+    c.execute('''CREATE TABLE IF NOT EXISTS pm_masine (id INTEGER PRIMARY KEY AUTOINCREMENT, linija_id INTEGER, naziv TEXT, FOREIGN KEY(linija_id) REFERENCES pm_linije(id))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS pm_zadaci (id INTEGER PRIMARY KEY AUTOINCREMENT, masina_id INTEGER, opis_zadatka TEXT, tip_odrzavanja TEXT, FOREIGN KEY(masina_id) REFERENCES pm_masine(id))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS pm_evidencija (id INTEGER PRIMARY KEY AUTOINCREMENT, zadatak_id INTEGER, status TEXT, korisnik TEXT, datum DATETIME, napomena TEXT, FOREIGN KEY(zadatak_id) REFERENCES pm_zadaci(id))''')
+
+    # Budzet Tabele
+    c.execute('''CREATE TABLE IF NOT EXISTS budzet_odobren (id INTEGER PRIMARY KEY AUTOINCREMENT, godina INTEGER, kategorija TEXT UNIQUE, odobrena_suma REAL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS budzet_potrosen (id INTEGER PRIMARY KEY AUTOINCREMENT, kategorija TEXT, stavka TEXT, kolicina INTEGER, cena_po_komadu REAL, ukupno REAL, dobavljac TEXT, datum DATETIME, korisnik TEXT)''')
+
+    # Krpljenje
+    try: c.execute("ALTER TABLE delovi ADD COLUMN dobavljac TEXT DEFAULT ''")
+    except: pass
+    try: c.execute("ALTER TABLE delovi ADD COLUMN cena REAL DEFAULT 0.0")
+    except: pass
+    try: c.execute("ALTER TABLE pm_linije ADD COLUMN ikona TEXT DEFAULT '🏭'")
+    except: pass
+    try: c.execute("ALTER TABLE pm_linije ADD COLUMN redosled INTEGER DEFAULT 0")
+    except: pass
+    try: c.execute("ALTER TABLE pm_masine ADD COLUMN redosled INTEGER DEFAULT 0")
+    except: pass
+    try: c.execute("ALTER TABLE pm_zadaci ADD COLUMN redosled INTEGER DEFAULT 0")
+    except: pass
+
+    # Početni podaci
+    if c.execute("SELECT count(*) FROM korisnici").fetchone()[0] == 0:
+        c.execute("INSERT INTO korisnici (username, password, uloga) VALUES ('admin', 'admin', 'admin')")
+        c.execute("INSERT INTO korisnici (username, password, uloga) VALUES ('tehnicar', 'tehnicar', 'tehnicar')")
+        
+    if c.execute("SELECT count(*) FROM podesavanja WHERE kljuc='pm_pocetak'").fetchone()[0] == 0:
+        c.execute("INSERT INTO podesavanja (kljuc, vrednost) VALUES ('pm_pocetak', ?)", (str(datetime.date.today()),))
+        
+    if c.execute("SELECT count(*) FROM podesavanja WHERE kljuc='reset_pin'").fetchone()[0] == 0:
+        c.execute("INSERT INTO podesavanja (kljuc, vrednost) VALUES ('reset_pin', '300120')")
+        
+    conn.commit()
+    conn.close()
+
+# ==========================================
+# 2. DIJALOZI I TASTATURA
+# ==========================================
+class ModernConfirm(tk.Toplevel):
+    def __init__(self, parent, naslov, tekst, boja_dugmeta="#10b981"):
+        super().__init__(parent)
+        self.title(naslov)
+        self.geometry("550x260")
+        self.configure(bg="#27272a")
+        self.transient(parent)
+        self.grab_set()
+        self.result = False
+        
+        f = tk.Frame(self, bg="#27272a")
+        f.pack(expand=True, fill="both", padx=20, pady=20)
+        
+        tk.Label(f, text=naslov, font=("Segoe UI", 16, "bold"), fg="white", bg="#27272a").pack(pady=(0,5))
+        tk.Label(f, text=tekst, font=("Segoe UI", 12), fg="#a1a1aa", bg="#27272a", justify="center", wraplength=500).pack(pady=10, expand=True)
+        
+        btn_f = tk.Frame(f, bg="#27272a")
+        btn_f.pack(fill="x", pady=(10,0))
+        
+        tk.Button(btn_f, text="OTKAŽI", font=("Segoe UI", 12, "bold"), bg="#3f3f46", fg="white", relief="flat", command=self.ne, width=15).pack(side="left", expand=True, padx=10, pady=5)
+        tk.Button(btn_f, text="POTVRDI", font=("Segoe UI", 12, "bold"), bg=boja_dugmeta, fg="white", relief="flat", command=self.da, width=15).pack(side="right", expand=True, padx=10, pady=5)
+        
+        self.update_idletasks()
+        self.geometry(f'+{(self.winfo_screenwidth()//2)-(self.winfo_width()//2)}+{(self.winfo_screenheight()//2)-(self.winfo_height()//2)}')
+        self.wait_window()
+        
+    def da(self):
+        self.result = True
+        self.destroy()
+        
+    def ne(self):
+        self.result = False
+        self.destroy()
+
+class VirtualKeyboard(tk.Toplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Virtuelna Tastatura")
+        self.geometry("900x320")
+        self.attributes('-topmost', True) 
+        self.configure(bg="#18181b")
+        self.protocol("WM_DELETE_WINDOW", self.hide)
+        self.parent = parent
+        self.is_shift = False
+        self.keys_lower = [['1','2','3','4','5','6','7','8','9','0','Back'],['q','w','e','r','t','y','u','i','o','p','š','đ'],['a','s','d','f','g','h','j','k','l','č','ć'],['Shift','z','x','c','v','b','n','m','ž','Enter'],['Space']]
+        self.keys_upper = [['!','"','#','$','%','&','/','(',')','=','Back'],['Q','W','E','R','T','Y','U','I','O','P','Š','Đ'],['A','S','D','F','G','H','J','K','L','Č','Ć'],['Shift','Z','X','C','V','B','N','M','Ž','Enter'],['Space']]
+        self.create_widgets()
+        self.withdraw() 
+
+    def create_widgets(self):
+        for widget in self.winfo_children(): widget.destroy()
+        layout = self.keys_upper if self.is_shift else self.keys_lower
+        for row in layout:
+            f = tk.Frame(self, bg="#18181b"); f.pack(pady=4)
+            for key in row:
+                w = 4 if len(key) == 1 else (30 if key == 'Space' else 8)
+                boja = "#3b82f6" if key in ['Shift', 'Enter', 'Back'] else "#3f3f46"
+                tk.Button(f, text=key, font=("Segoe UI", 16, "bold"), bg=boja, fg="white", relief="flat", width=w, takefocus=0, command=lambda k=key: self.press(k)).pack(side="left", padx=4)
+
+    def press(self, key):
+        if key == 'Shift': 
+            self.is_shift = not self.is_shift
+            self.create_widgets()
+            return
+        target = getattr(self.parent, 'active_input', None)
+        if not target: return
+        try:
+            if key == 'Back':
+                idx = target.index(tk.INSERT)
+                if idx > 0: target.delete(idx - 1)
+            elif key == 'Space': target.insert(tk.INSERT, ' ')
+            elif key == 'Enter': target.event_generate('<Return>')
+            else: target.insert(tk.INSERT, key)
+        except: pass 
+        target.focus_set()
+
+    def toggle(self):
+        if self.winfo_ismapped(): self.withdraw()
+        else:
+            self.deiconify(); self.update_idletasks()
+            self.geometry(f'+{(self.winfo_screenwidth()//2)-(self.winfo_width()//2)}+{self.winfo_screenheight()-self.winfo_height()-50}')
+
+    def hide(self): self.withdraw()
+
+class TouchDialog(tk.Toplevel):
+    def __init__(self, parent, naslov, naziv_dela, max_kol, tip_transakcije):
+        super().__init__(parent)
+        self.title(naslov); self.geometry("600x750"); self.configure(bg="#27272a"); self.transient(parent)
+        self.max_kol = max_kol; self.tip = tip_transakcije; self.result_kol = None; self.result_napomena = ""
+        
+        top_f = tk.Frame(self, bg="#27272a"); top_f.pack(pady=10, fill="x")
+        ttk.Label(top_f, text=naziv_dela, font=("Segoe UI", 16, "bold"), background="#27272a", foreground="#0ea5e9", wraplength=550, justify="center").pack(pady=5)
+        
+        if self.tip in ["IZLAZ", "KORPA"]: ttk.Label(top_f, text=f"Dostupno: {max_kol}", font=("Segoe UI", 12), background="#27272a", foreground="#a1a1aa").pack()
+        elif self.tip == "POVRAT": ttk.Label(top_f, text="Unesite količinu koju vraćate", font=("Segoe UI", 12, "bold"), background="#27272a", foreground="#f59e0b").pack()
+        elif self.tip == "ULAZ": ttk.Label(top_f, text="Unesite nabavljenu količinu", font=("Segoe UI", 12), background="#27272a", foreground="#10b981").pack()
+            
+        self.lbl_display = tk.Label(self, text="0", font=("Segoe UI", 42, "bold"), bg="#18181b", fg="white", width=10, pady=10)
+        self.lbl_display.pack(pady=15)
+        
+        f_napomena = tk.Frame(self, bg="#27272a"); f_napomena.pack(pady=5)
+        ttk.Label(f_napomena, text="Napomena:", background="#27272a", foreground="white").pack(side="left")
+        self.entry_nap = ttk.Entry(f_napomena, width=35); self.entry_nap.pack(side="left", padx=10)
+
+        f_numpad = tk.Frame(self, bg="#27272a"); f_numpad.pack(pady=10)
+        for r, row in enumerate([('7','8','9'), ('4','5','6'), ('1','2','3'), ('C','0','OK')]):
+            for c, btn_text in enumerate(row):
+                boja = "#0ea5e9" if btn_text == "OK" else ("#ef4444" if btn_text == "C" else "#3f3f46")
+                tk.Button(f_numpad, text=btn_text, font=("Segoe UI", 24, "bold"), bg=boja, fg="white", width=5, relief="flat", command=lambda t=btn_text: self.pritisak(t)).grid(row=r, column=c, padx=5, pady=5)
+                
+        self.update_idletasks()
+        self.geometry(f'+{(self.winfo_screenwidth()//2)-(self.winfo_width()//2)}+{(self.winfo_screenheight()//2)-(self.winfo_height()//2)}')
+        self.wait_window()
+
+    def pritisak(self, t):
+        trenutno = self.lbl_display.cget("text")
+        if t == "C": self.lbl_display.config(text="0")
+        elif t == "OK":
+            val = int(trenutno)
+            if val <= 0: return messagebox.showerror("Greška", "Količina mora biti veća od 0!")
+            if self.tip in ["IZLAZ", "KORPA"] and val > self.max_kol: return messagebox.showerror("Greška", f"Nedovoljno na stanju! (Max: {self.max_kol})")
+            self.result_kol = val; self.result_napomena = self.entry_nap.get(); self.destroy()
+        else: self.lbl_display.config(text=t if trenutno == "0" else trenutno + t)
+
+# ==========================================
+# 3. GLAVNA APLIKACIJA
+# ==========================================
+class PPM_App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("AKYTEC PPM Operations Suite")
+        self.geometry("1300x850")
+        
+        self.bg_main = "#18181b"; self.bg_panel = "#27272a"; self.bg_input = "#3f3f46"
+        self.bg_card = "#202024"; self.bg_card_hover = "#3f3f46"
+        self.accent = "#0ea5e9"; self.text_light = "#f4f4f5"; self.text_muted = "#a1a1aa"
+        
+        self.korpa = []
+        
+        self.configure(bg=self.bg_main)
+        self.setup_styles()
+        init_db()
+        
+        self.active_input = None
+        self.vk = VirtualKeyboard(self)
+        self.bind_all("<FocusIn>", lambda e: setattr(self, 'active_input', e.widget) if isinstance(e.widget, (tk.Entry, ttk.Entry, ttk.Combobox)) else None)
+        
+        self.trenutni_korisnik = ""; self.role = ""
+        self.show_login()
+
+    def setup_styles(self):
+        style = ttk.Style(self); style.theme_use('clam')
+        style.configure("TFrame", background=self.bg_main)
+        style.configure("Panel.TFrame", background=self.bg_panel)
+        style.configure("TLabel", background=self.bg_main, foreground=self.text_light, font=("Segoe UI", 11))
+        style.configure("Header.TLabel", font=("Segoe UI", 24, "bold"), foreground=self.accent, background=self.bg_panel)
+        style.configure("Subheader.TLabel", font=("Segoe UI", 16, "bold"), foreground=self.text_light, background=self.bg_main)
+        style.configure("TEntry", fieldbackground=self.bg_input, foreground="white", insertcolor="white", font=("Segoe UI", 12), borderwidth=0)
+        style.configure("TCombobox", fieldbackground=self.bg_input, foreground="white", borderwidth=0)
+        
+        style.configure("TButton", font=("Segoe UI", 11, "bold"), padding=8, background=self.bg_input, foreground=self.text_light, borderwidth=0)
+        style.map("TButton", background=[('active', "#52525b")])
+        for n, c in [("Primary", self.accent), ("Success", "#10b981"), ("Danger", "#ef4444"), ("Warning", "#f59e0b"), ("Info", "#3b82f6")]:
+            style.configure(f"{n}.TButton", background=c, foreground="white")
+        
+        style.configure("Treeview", background=self.bg_panel, foreground=self.text_light, fieldbackground=self.bg_panel, rowheight=40, font=("Segoe UI", 11))
+        style.configure("Treeview.Heading", background=self.bg_input, foreground=self.text_light, font=("Segoe UI", 11, "bold"))
+        style.map('Treeview', background=[('selected', self.accent)])
+
+    def show_login(self):
+        for w in self.winfo_children():
+            if not isinstance(w, tk.Toplevel): w.destroy()
+        container = tk.Frame(self, bg=self.bg_main); container.place(relx=0.5, rely=0.5, anchor="center")
+        frame = ttk.Frame(container, style="Panel.TFrame"); frame.pack(ipadx=40, ipady=40)
+        ttk.Label(frame, text="Prijava u sistem", style="Header.TLabel").pack(pady=(10, 30))
+        ttk.Label(frame, text="Korisnik:", background=self.bg_panel).pack()
+        self.e_u = ttk.Entry(frame, width=30); self.e_u.pack(pady=5); self.e_u.bind('<Return>', self.check_login)
+        ttk.Label(frame, text="Lozinka:", background=self.bg_panel).pack()
+        self.e_p = ttk.Entry(frame, show="*", width=30); self.e_p.pack(pady=5); self.e_p.bind('<Return>', self.check_login)
+        ttk.Button(frame, text="⌨️ Tastatura", command=self.vk.toggle).pack(fill="x", pady=10)
+        ttk.Button(frame, text="Prijavi se", style="Primary.TButton", command=self.check_login).pack(fill="x")
+        self.e_u.focus_set()
+
+    def check_login(self, event=None):
+        conn = sqlite3.connect(DB_NAME)
+        res = conn.execute("SELECT uloga FROM korisnici WHERE username=? AND password=?", (self.e_u.get(), self.e_p.get())).fetchone()
+        conn.close()
+        if res: self.trenutni_korisnik = self.e_u.get(); self.load_main(res[0])
+        else: messagebox.showerror("Greška", "Pogrešno korisničko ime ili lozinka!")
+
+    def load_main(self, role):
+        self.role = role
+        for w in self.winfo_children():
+            if not isinstance(w, tk.Toplevel): w.destroy()
+            
+        header = tk.Frame(self, bg=self.bg_panel, height=60); header.pack(fill="x")
+        
+        logo_frame = tk.Frame(header, bg=self.bg_panel)
+        logo_frame.pack(side="left", padx=20, pady=10)
+        
+        lbl_kocka = tk.Label(logo_frame, text=" R ", font=("Segoe UI", 16, "bold"), fg="white", bg="#3b82f6")
+        lbl_kocka.pack(side="left", padx=(0, 10))
+        tk.Label(logo_frame, text="AKYTEC PPM Suite", font=("Segoe UI", 18, "bold"), fg=self.accent, bg=self.bg_panel).pack(side="left")
+        
+        ttk.Button(header, text="⌨️ Tastatura", style="Info.TButton", command=self.vk.toggle).pack(side="left", padx=30, pady=10)
+        ttk.Button(header, text="Odjava", style="Danger.TButton", command=self.show_login).pack(side="right", padx=20, pady=10)
+        tk.Label(header, text=f"Prijavljen kao: {self.trenutni_korisnik} ({self.role})", fg="white", bg=self.bg_panel).pack(side="right", padx=10)
+        
+        self.sadrzaj = tk.Frame(self, bg=self.bg_main); self.sadrzaj.pack(fill="both", expand=True, padx=20, pady=20)
+        self.otvori_glavni_meni()
+
+    def ocisti_ekran(self):
+        for w in self.sadrzaj.winfo_children(): w.destroy()
+
+    def napravi_naslov(self, tekst, funkcija_nazad):
+        f = tk.Frame(self.sadrzaj, bg=self.bg_main); f.pack(fill="x", pady=(0, 20))
+        tk.Button(f, text="⬅ Nazad", font=("Segoe UI", 12, "bold"), bg=self.bg_input, fg="white", relief="flat", command=funkcija_nazad, padx=15, pady=5).pack(side="left")
+        ttk.Label(f, text=tekst, style="Subheader.TLabel").pack(side="left", padx=20)
+
+    def napravi_grid_meni(self, stavke):
+        meni_grid = tk.Frame(self.sadrzaj, bg=self.bg_main); meni_grid.pack(fill="both", expand=True)
+        cols = 3 if len(stavke) > 4 else 2
+        rows = (len(stavke) + cols - 1) // cols
+        
+        for i in range(cols): meni_grid.columnconfigure(i, weight=1, uniform="col")
+        for i in range(rows): meni_grid.rowconfigure(i, weight=1, uniform="row")
+        
+        for idx, (ikona, naslov, opis, komanda, boja) in enumerate(stavke):
+            pad_f = tk.Frame(meni_grid, bg=self.bg_main)
+            pad_f.grid(row=idx // cols, column=idx % cols, sticky="nsew", padx=15, pady=15)
+            
+            btn = tk.Button(pad_f, bg=self.bg_card, relief="flat", activebackground=self.bg_card_hover, command=komanda)
+            container = tk.Frame(btn, bg=self.bg_card); container.place(relx=0.5, rely=0.5, anchor="center")
+            tk.Label(container, text=ikona, font=("Segoe UI Emoji", 48), bg=self.bg_card, fg=boja).pack()
+            tk.Label(container, text=naslov, font=("Segoe UI", 18, "bold"), bg=self.bg_card, fg="white").pack()
+            tk.Label(container, text=opis, font=("Segoe UI", 11), bg=self.bg_card, fg=self.text_muted).pack()
+            
+            def bind_hover(w, b=btn, c=container):
+                w.bind("<Enter>", lambda e: [b.config(bg=self.bg_card_hover), c.config(bg=self.bg_card_hover)] + [child.config(bg=self.bg_card_hover) for child in c.winfo_children()])
+                w.bind("<Leave>", lambda e: [b.config(bg=self.bg_card), c.config(bg=self.bg_card)] + [child.config(bg=self.bg_card) for child in c.winfo_children()])
+                if w != b: w.bind("<Button-1>", lambda e, cmd=komanda: cmd())
+            
+            bind_hover(btn); bind_hover(container)
+            for child in container.winfo_children(): bind_hover(child)
+            btn.pack(fill="both", expand=True)
+
+    def otvori_glavni_meni(self):
+        self.ocisti_ekran()
+        stavke = [
+            ("🗄️", "Magacin i Delovi", "Ulaz, Izlaz, Povrat, Unos delova", self.otvori_akcije_delova, self.accent),
+            ("💰", "Budžet i Troškovi", "Odobren vs Potrošen Budžet", self.otvori_budzet_meni, "#d4af37"),
+            ("🛠️", "PM Održavanje", "Ček liste i Praćenje zadataka", self.otvori_pm_hub, "#8b5cf6"),
+            ("📋", "Otvoreni Nalozi", "Pregled naloga u toku", self.otvori_otvorene_naloge, "#f59e0b"),
+            ("🔄", "Istorija", "Sve promene na stanju u magacinu", self.otvori_istoriju, self.accent)
+        ]
+        if self.role == "admin": stavke.append(("🎛️", "Podešavanja", "Upravljanje korisnicima i Sistemom", self.otvori_podesavanja, "#10b981"))
+        self.napravi_grid_meni(stavke)
+
+    # ==========================================
+    # BUDZET
+    # ==========================================
+    def otvori_budzet_meni(self):
+        self.ocisti_ekran(); self.napravi_naslov("Upravljanje Budžetom", self.otvori_glavni_meni)
+        self.napravi_grid_meni([
+            ("💵", "Odobren Budžet", "Sredstva", self.prikazi_odobren_budzet, "#10b981"),
+            ("💸", "Potrošen Budžet", "Lista nabavki", self.prikazi_potrosen_budzet, "#ef4444"),
+            ("📊", "Uporedni Prikaz", "Odobreno vs Potrošeno", self.prikazi_uporedni_budzet, "#3b82f6")
+        ])
+
+    def prikazi_odobren_budzet(self):
+        self.ocisti_ekran(); self.napravi_naslov("Odobren Budžet", self.otvori_budzet_meni)
+        if self.role == 'admin':
+            f_adm = tk.Frame(self.sadrzaj, bg=self.bg_panel); f_adm.pack(fill="x", pady=10, padx=10)
+            ttk.Button(f_adm, text="➕ DODAJ STAVKU", style="Success.TButton", command=self.dodaj_odobren_budzet_dialog).pack(side="left", padx=10, pady=10)
+            ttk.Button(f_adm, text="🗑️ OBRIŠI SELEKTOVANO", style="Danger.TButton", command=lambda: self.obrisi_odobren(tv)).pack(side="right", padx=10, pady=10)
+
+        tv = ttk.Treeview(self.sadrzaj, columns=("ID", "Godina", "Kategorija", "Suma"), show="headings")
+        for c in ("ID", "Godina", "Kategorija", "Suma"): tv.heading(c, text=c)
+        tv.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        def ucitaj():
+            for i in tv.get_children(): tv.delete(i)
+            conn = sqlite3.connect(DB_NAME)
+            for r in conn.execute("SELECT id, godina, kategorija, odobrena_suma FROM budzet_odobren ORDER BY godina DESC"): tv.insert("", "end", values=(r[0], r[1], r[2], f"{r[3]:,.2f}"))
+            conn.close()
+        ucitaj(); self.osvezi_odobren = ucitaj
+
+    def dodaj_odobren_budzet_dialog(self):
+        w = tk.Toplevel(self); w.title("Dodaj Budžet"); w.geometry("300x250"); w.configure(bg=self.bg_panel)
+        tk.Label(w, text="Kategorija:", bg=self.bg_panel, fg="white").pack(pady=5)
+        e_kat = ttk.Combobox(w, values=["Elektronika", "Mehanika", "Pneumatika", "Univerzalno"]); e_kat.pack()
+        tk.Label(w, text="Suma (RSD):", bg=self.bg_panel, fg="white").pack(pady=5)
+        e_suma = ttk.Entry(w); e_suma.pack()
+        
+        def spasi():
+            try: suma = float(e_suma.get())
+            except: return messagebox.showerror("Greška", "Suma mora biti broj!")
+            conn = sqlite3.connect(DB_NAME)
+            try: conn.execute("INSERT INTO budzet_odobren (godina, kategorija, odobrena_suma) VALUES (?, ?, ?)", (datetime.date.today().year, e_kat.get(), suma))
+            except sqlite3.IntegrityError: conn.execute("UPDATE budzet_odobren SET odobrena_suma=? WHERE kategorija=?", (suma, e_kat.get()))
+            conn.commit(); conn.close(); self.osvezi_odobren(); w.destroy()
+        ttk.Button(w, text="SAČUVAJ", style="Success.TButton", command=spasi).pack(pady=15)
+
+    def obrisi_odobren(self, tv):
+        sel = tv.focus()
+        if sel:
+            dlg = ModernConfirm(self, "Brisanje Budžeta", "Da li želite da izbrišete ovu stavku budžeta?", "#ef4444")
+            if dlg.result:
+                conn = sqlite3.connect(DB_NAME)
+                conn.execute("DELETE FROM budzet_odobren WHERE id=?", (tv.item(sel)['values'][0],))
+                conn.commit(); conn.close(); self.osvezi_odobren()
+
+    def prikazi_potrosen_budzet(self):
+        self.ocisti_ekran(); self.napravi_naslov("Potrošen Budžet", self.otvori_budzet_meni)
+        if self.role == 'admin':
+            f_adm = tk.Frame(self.sadrzaj, bg=self.bg_panel); f_adm.pack(fill="x", padx=10, pady=5)
+            ttk.Button(f_adm, text="🗑️ OBRIŠI NABAVKU (Vraća na stanje i budžet)", style="Danger.TButton", command=lambda: obrisi_nabavku()).pack(side="right", padx=10, pady=5)
+
+        tv = ttk.Treeview(self.sadrzaj, columns=("ID", "Stavka", "Kat", "Kol", "Cena", "Ukupno", "Datum"), show="headings")
+        tv.column("ID", width=0, stretch=False) 
+        for c in ("Stavka", "Kat", "Kol", "Cena", "Ukupno", "Datum"): tv.heading(c, text=c)
+        tv.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        def ucitaj():
+            for i in tv.get_children(): tv.delete(i)
+            conn = sqlite3.connect(DB_NAME)
+            for r in conn.execute("SELECT id, stavka, kategorija, kolicina, cena_po_komadu, ukupno, datum FROM budzet_potrosen ORDER BY datum DESC"):
+                tv.insert("", "end", values=(r[0], r[1], r[2], r[3], f"{r[4]:,.2f}", f"{r[5]:,.2f}", r[6]))
+            conn.close()
+            
+        def obrisi_nabavku():
+            sel = tv.focus()
+            if not sel: return messagebox.showwarning("Greška", "Izaberite nabavku!")
+            vals = tv.item(sel)['values']
+            b_id = vals[0]; naziv = vals[1]; kolicina = float(vals[3])
+            
+            dlg = ModernConfirm(self, "Poništavanje Nabavke", f"Da li ste sigurni da želite poništiti i obrisati nabavku za '{naziv}'?\nOvo će umanjiti stanje dela u magacinu.", "#ef4444")
+            if dlg.result:
+                conn = sqlite3.connect(DB_NAME)
+                conn.execute("UPDATE delovi SET stanje = stanje - ? WHERE naziv = ?", (kolicina, naziv))
+                conn.execute("DELETE FROM budzet_potrosen WHERE id = ?", (b_id,))
+                conn.commit(); conn.close(); ucitaj()
+        ucitaj()
+
+    def prikazi_uporedni_budzet(self):
+        self.ocisti_ekran(); self.napravi_naslov("Uporedni Prikaz", self.otvori_budzet_meni)
+        tv = ttk.Treeview(self.sadrzaj, columns=("Kat", "Odobreno", "Potroseno", "Preostalo"), show="headings", height=15)
+        for c in ("Kat", "Odobreno", "Potroseno", "Preostalo"): tv.heading(c, text=c)
+        tv.tag_configure('ok', foreground='#10b981'); tv.tag_configure('kriticno', foreground='#ef4444')
+        tv.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        conn = sqlite3.connect(DB_NAME)
+        for r in conn.execute("SELECT o.kategorija, o.odobrena_suma, IFNULL(SUM(p.ukupno), 0) FROM budzet_odobren o LEFT JOIN budzet_potrosen p ON o.kategorija = p.kategorija GROUP BY o.kategorija").fetchall():
+            pre = r[1] - r[2]
+            tv.insert("", "end", values=(r[0], f"{r[1]:,.2f}", f"{r[2]:,.2f}", f"{pre:,.2f}"), tags=('kriticno' if pre < 0 else 'ok',))
+        conn.close()
+
+    # ==========================================
+    # MAGACIN I DELOVI
+    # ==========================================
+    def otvori_akcije_delova(self):
+        self.ocisti_ekran(); self.napravi_naslov("Magacin i Delovi", self.otvori_glavni_meni)
+        self.napravi_grid_meni([
+            ("🛒", "Nalog (Izlaz)", "", lambda: self.izbor_kategorije("KORPA"), self.accent),
+            ("📥", "Ulaz / Nabavka", "", lambda: self.izbor_kategorije("ULAZ"), "#10b981"),
+            ("🔄", "Povrat", "", lambda: self.izbor_kategorije("POVRAT"), "#f59e0b"),
+            ("➕", "Novi Deo", "", self.otvori_formu_novi_deo, "#10b981"),
+            ("✏️", "Pregled / Izmena", "", lambda: self.izbor_kategorije("IZMENA"), "#3b82f6") 
+        ])
+
+    def izbor_kategorije(self, rezim):
+        self.ocisti_ekran(); self.napravi_naslov(f"Kategorije - {rezim}", self.otvori_akcije_delova)
+        conn = sqlite3.connect(DB_NAME)
+        kats = conn.execute("SELECT kategorija, COUNT(*) FROM delovi GROUP BY kategorija").fetchall()
+        conn.close()
+        
+        for i, (kat, broj) in enumerate(kats):
+            if i % 3 == 0: red = tk.Frame(self.sadrzaj, bg=self.bg_main); red.pack(fill="x", pady=5)
+            tk.Button(red, text=f"{kat}\n({broj})", font=("Segoe UI", 16, "bold"), bg=self.bg_panel, fg="white", height=3, command=lambda k=kat, r=rezim: self.otvori_tabelu_zaliha(k, r)).pack(side="left", fill="both", expand=True, padx=10, pady=10)
+
+    def otvori_tabelu_zaliha(self, kat, rezim):
+        self.trenutna_kategorija = kat
+        self.ocisti_ekran(); self.napravi_naslov(f"{kat} - {rezim}", lambda: self.izbor_kategorije(rezim))
+        
+        left_f = tk.Frame(self.sadrzaj, bg=self.bg_main); left_f.pack(side="left", fill="both", expand=True)
+        toolbar = tk.Frame(left_f, bg=self.bg_main); toolbar.pack(fill="x", pady=10)
+        
+        self.search_var = tk.StringVar(); self.search_var.trace("w", lambda n, i, m: self.osvezi_tabelu_delova())
+        ttk.Label(toolbar, text="🔍 Pretraga: ").pack(side="left"); ttk.Entry(toolbar, textvariable=self.search_var, width=30).pack(side="left", padx=10)
+        
+        if rezim == "KORPA": ttk.Button(toolbar, text="🛒 DODAJ", style="Primary.TButton", command=lambda: self.akcija_kolicina("KORPA")).pack(side="right")
+        elif rezim == "ULAZ": ttk.Button(toolbar, text="📥 UNESI NABAVKU", style="Success.TButton", command=lambda: self.akcija_kolicina("ULAZ")).pack(side="right")
+        elif rezim == "POVRAT": ttk.Button(toolbar, text="🔄 VRATI", style="Warning.TButton", command=lambda: self.akcija_kolicina("POVRAT")).pack(side="right")
+        elif rezim == "IZMENA": 
+            ttk.Button(toolbar, text="✏️ IZMENI DEO", style="Info.TButton", command=self.izmeni_selektovan_deo).pack(side="right")
+            # DODATO DUGME ZA BRISANJE U TOOLBAR
+            if self.role == 'admin':
+                ttk.Button(toolbar, text="🗑️ OBRIŠI DEO", style="Danger.TButton", command=self.obrisi_deo_iz_glavnog_menija).pack(side="right", padx=10)
+
+        self.tree_d = ttk.Treeview(left_f, columns=("PN", "Naziv", "Stanje", "Min", "Cena", "ID"), show="headings")
+        for c in ("PN", "Naziv", "Stanje", "Min", "Cena"): self.tree_d.heading(c, text=c)
+        self.tree_d.column("ID", width=0, stretch=False); self.tree_d.pack(fill="both", expand=True, padx=10, pady=10)
+        self.osvezi_tabelu_delova()
+
+        if rezim == "KORPA":
+            right_f = tk.Frame(self.sadrzaj, bg=self.bg_panel, width=350); right_f.pack(side="right", fill="y", padx=10, pady=10)
+            ttk.Label(right_f, text="Nalog", font=("Segoe UI", 16, "bold")).pack(pady=10)
+            self.tree_k = ttk.Treeview(right_f, columns=("Deo", "Kol"), show="headings", height=15); self.tree_k.heading("Deo", text="Deo"); self.tree_k.heading("Kol", text="Kol"); self.tree_k.pack(fill="both", expand=True)
+            self.osvezi_korpu(); ttk.Button(right_f, text="🚀 IZDAJ NALOG", style="Success.TButton", command=self.izdaj_korpu).pack(fill="x", pady=10)
+
+    def osvezi_tabelu_delova(self):
+        for i in self.tree_d.get_children(): self.tree_d.delete(i)
+        search = f"%{self.search_var.get()}%"
+        conn = sqlite3.connect(DB_NAME)
+        for r in conn.execute("SELECT part_number, naziv, stanje, min_stanje, cena, id FROM delovi WHERE kategorija=? AND (naziv LIKE ? OR part_number LIKE ?)", (self.trenutna_kategorija, search, search)): self.tree_d.insert("", "end", values=r)
+        conn.close()
+
+    def osvezi_korpu(self):
+        for i in self.tree_k.get_children(): self.tree_k.delete(i)
+        for item in self.korpa: self.tree_k.insert("", "end", values=(item['naziv'], item['kol']))
+
+    def akcija_kolicina(self, tip):
+        sel = self.tree_d.focus()
+        if not sel: return messagebox.showwarning("Greška", "Izaberite deo!")
+        vals = self.tree_d.item(sel)['values']
+        naziv = vals[1]; stanje = int(vals[2]); pid = vals[5]; cena = float(vals[4]) if vals[4] else 0.0
+        
+        d = TouchDialog(self, f"Unos: {tip}", naziv, 100000 if tip in ["ULAZ", "POVRAT"] else stanje, tip)
+        if d.result_kol:
+            if tip == "KORPA":
+                self.korpa.append({'pid': pid, 'naziv': naziv, 'kol': d.result_kol, 'napomena': d.result_napomena})
+                self.osvezi_korpu()
+            else:
+                conn = sqlite3.connect(DB_NAME)
+                novo_stanje = stanje + d.result_kol if tip in ["ULAZ", "POVRAT"] else stanje - d.result_kol
+                conn.execute("UPDATE delovi SET stanje=? WHERE id=?", (novo_stanje, pid))
+                conn.execute("INSERT INTO transakcije (part_id, kolicina, tip, korisnik, datum, napomena) VALUES (?, ?, ?, ?, datetime('now', 'localtime'), ?)", (pid, d.result_kol, tip, self.trenutni_korisnik, d.result_napomena))
+                
+                if tip == "ULAZ":
+                    ukupno = cena * d.result_kol
+                    dob = conn.execute("SELECT dobavljac FROM delovi WHERE id=?", (pid,)).fetchone()[0] or "Nepoznato"
+                    conn.execute("INSERT INTO budzet_potrosen (kategorija, stavka, kolicina, cena_po_komadu, ukupno, dobavljac, datum, korisnik) VALUES (?, ?, ?, ?, ?, ?, datetime('now', 'localtime'), ?)", (self.trenutna_kategorija, naziv, d.result_kol, cena, ukupno, dob, self.trenutni_korisnik))
+                    messagebox.showinfo("Uspeh", f"Trošak budžeta: {ukupno:,.2f} RSD")
+                conn.commit(); conn.close(); self.osvezi_tabelu_delova()
+
+    def izdaj_korpu(self):
+        if not self.korpa: return
+        rn = f"RN-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        conn = sqlite3.connect(DB_NAME)
+        conn.execute("INSERT INTO radni_nalozi (rn_broj, status, datum, korisnik) VALUES (?, 'Otvoren', datetime('now', 'localtime'), ?)", (rn, self.trenutni_korisnik))
+        rn_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        
+        for k in self.korpa:
+            trenutno = conn.execute("SELECT stanje FROM delovi WHERE id=?", (k['pid'],)).fetchone()[0]
+            conn.execute("UPDATE delovi SET stanje=? WHERE id=?", (trenutno - k['kol'], k['pid']))
+            conn.execute("INSERT INTO transakcije (part_id, kolicina, tip, korisnik, datum, napomena) VALUES (?, ?, 'IZLAZ', ?, datetime('now', 'localtime'), ?)", (k['pid'], k['kol'], self.trenutni_korisnik, f"[{rn}] {k['napomena']}"))
+            conn.execute("INSERT INTO rn_stavke (rn_id, part_id, kolicina) VALUES (?, ?, ?)", (rn_id, k['pid'], k['kol']))
+        conn.commit(); conn.close(); self.korpa = []; self.osvezi_korpu(); self.osvezi_tabelu_delova()
+        messagebox.showinfo("Uspeh", f"Radni nalog {rn} izdat!")
+
+    def obrisi_deo_iz_glavnog_menija(self):
+        sel = self.tree_d.focus()
+        if not sel: return messagebox.showwarning("Greška", "Izaberite deo iz tabele koji želite da obrišete.")
+        pid = self.tree_d.item(sel)['values'][5]
+        naziv = self.tree_d.item(sel)['values'][1]
+        
+        dlg = ModernConfirm(self, "Kritično Brisanje", f"Da li ste apsolutno sigurni da želite trajno obrisati deo:\n\n'{naziv}'\n\nBrisanjem dela brišete i celokupnu istoriju njegovih transakcija iz baze!", "#ef4444")
+        if dlg.result:
+            conn = sqlite3.connect(DB_NAME)
+            conn.execute("DELETE FROM transakcije WHERE part_id=?", (pid,))
+            conn.execute("DELETE FROM rn_stavke WHERE part_id=?", (pid,))
+            conn.execute("DELETE FROM delovi WHERE id=?", (pid,))
+            conn.commit(); conn.close(); self.osvezi_tabelu_delova()
+
+    def izmeni_selektovan_deo(self):
+        sel = self.tree_d.focus()
+        if not sel: return messagebox.showwarning("Greška", "Izaberite deo!")
+        pid = self.tree_d.item(sel)['values'][5]
+        
+        conn = sqlite3.connect(DB_NAME)
+        deo = conn.execute("SELECT part_number, naziv, kategorija, min_stanje, cena, dobavljac FROM delovi WHERE id=?", (pid,)).fetchone()
+        conn.close()
+        
+        w = tk.Toplevel(self); w.title("Sveobuhvatna Izmena Dela"); w.geometry("450x550"); w.configure(bg=self.bg_panel)
+        f = tk.Frame(w, bg=self.bg_panel); f.pack(pady=20, padx=20, fill="both", expand=True)
+        
+        polja = [("Part Number:", deo[0]), ("Naziv:", deo[1]), ("Min Alarm:", str(deo[3])), ("Cena (RSD):", str(deo[4])), ("Dobavljač:", deo[5] if deo[5] else "")]
+        unosi = []
+        for i, (lbl, val) in enumerate(polja):
+            tk.Label(f, text=lbl, bg=self.bg_panel, fg="white", font=("Segoe UI", 11)).grid(row=i, column=0, pady=10, sticky="w")
+            e = ttk.Entry(f, width=25); e.insert(0, val); e.grid(row=i, column=1, pady=10, padx=10)
+            unosi.append(e)
+            
+        tk.Label(f, text="Kategorija:", bg=self.bg_panel, fg="white", font=("Segoe UI", 11)).grid(row=len(polja), column=0, pady=10, sticky="w")
+        cb_kat = ttk.Combobox(f, values=["Elektronika", "Mehanika", "Pneumatika", "Alati", "Servisi"], width=23)
+        cb_kat.set(deo[2]); cb_kat.grid(row=len(polja), column=1, pady=10, padx=10)
+        
+        def spasi():
+            try:
+                novi_pn = unosi[0].get(); novi_naziv = unosi[1].get(); novi_min = int(unosi[2].get()); nova_cena = float(unosi[3].get()); novi_dob = unosi[4].get(); nova_kat = cb_kat.get()
+                conn = sqlite3.connect(DB_NAME)
+                conn.execute("UPDATE delovi SET part_number=?, naziv=?, kategorija=?, min_stanje=?, cena=?, dobavljac=? WHERE id=?", (novi_pn, novi_naziv, nova_kat, novi_min, nova_cena, novi_dob, pid))
+                conn.commit(); conn.close(); self.osvezi_tabelu_delova(); w.destroy(); messagebox.showinfo("Uspeh", "Podaci o delu su uspešno ažurirani!")
+            except ValueError: messagebox.showerror("Greška", "Min stanje i Cena moraju biti brojevi!")
+            except sqlite3.IntegrityError: messagebox.showerror("Greška", "Part Number već postoji u bazi!")
+            
+        def obrisi():
+            dlg = ModernConfirm(w, "Kritično Brisanje", f"Da li ste sigurni da želite trajno obrisati ovaj deo?\nBrisanjem dela brišete i njegovu istoriju transakcija!", "#ef4444")
+            if dlg.result:
+                conn = sqlite3.connect(DB_NAME)
+                conn.execute("DELETE FROM transakcije WHERE part_id=?", (pid,))
+                conn.execute("DELETE FROM rn_stavke WHERE part_id=?", (pid,))
+                conn.execute("DELETE FROM delovi WHERE id=?", (pid,))
+                conn.commit(); conn.close(); self.osvezi_tabelu_delova(); w.destroy()
+                
+        ttk.Button(f, text="💾 Sačuvaj Izmene", style="Info.TButton", command=spasi).grid(row=len(polja)+1, column=0, columnspan=2, pady=20, fill="x")
+        if self.role == 'admin':
+            ttk.Button(f, text="🗑️ OBRIŠI DEO", style="Danger.TButton", command=obrisi).grid(row=len(polja)+2, column=0, columnspan=2, pady=5, fill="x")
+
+    def otvori_formu_novi_deo(self):
+        w = tk.Toplevel(self); w.title("Novi Deo"); w.geometry("400x450"); w.configure(bg=self.bg_panel)
+        f = tk.Frame(w, bg=self.bg_panel); f.pack(pady=20, padx=20, fill="both")
+        
+        polja = [("Part Number:", ttk.Entry(f)), ("Naziv:", ttk.Entry(f)), ("Kategorija:", ttk.Combobox(f, values=["Elektronika", "Mehanika", "Pneumatika", "Alati", "Servisi"])), ("Cena:", ttk.Entry(f)), ("Dobavljač:", ttk.Entry(f))]
+        za_unos = []
+        for i, (lbl, widget) in enumerate(polja):
+            tk.Label(f, text=lbl, bg=self.bg_panel, fg="white").grid(row=i, column=0, pady=10, sticky="w")
+            widget.grid(row=i, column=1, pady=10); za_unos.append(widget)
+
+        def sacuvaj():
+            try: cena = float(za_unos[3].get() or 0.0)
+            except: return messagebox.showerror("Greška", "Cena mora biti broj!")
+            conn = sqlite3.connect(DB_NAME)
+            try:
+                conn.execute("INSERT INTO delovi (part_number, naziv, kategorija, stanje, cena, dobavljac) VALUES (?, ?, ?, 0, ?, ?)", (za_unos[0].get(), za_unos[1].get(), za_unos[2].get(), cena, za_unos[4].get()))
+                conn.commit(); messagebox.showinfo("Uspeh", "Deo snimljen!"); w.destroy()
+            except sqlite3.IntegrityError: messagebox.showerror("Greška", "Deo sa ovim PN već postoji!")
+            conn.close()
+        ttk.Button(f, text="SAČUVAJ", style="Success.TButton", command=sacuvaj).grid(row=5, column=0, columnspan=2, pady=20)
+
+    # ==========================================
+    # NALOZI I ISTORIJA
+    # ==========================================
+    def otvori_otvorene_naloge(self):
+        self.ocisti_ekran(); self.napravi_naslov("Otvoreni Radni Nalozi", self.otvori_glavni_meni)
+        if self.role == 'admin':
+            f_adm = tk.Frame(self.sadrzaj, bg=self.bg_panel); f_adm.pack(fill="x", padx=10, pady=5)
+            ttk.Button(f_adm, text="✅ ZATVORI NALOG", style="Success.TButton", command=lambda: zatvori_nalog()).pack(side="left", padx=10, pady=5)
+            ttk.Button(f_adm, text="🗑️ OBRIŠI NALOG", style="Danger.TButton", command=lambda: obrisi_nalog()).pack(side="right", padx=10, pady=5)
+
+        tv = ttk.Treeview(self.sadrzaj, columns=("ID", "Nalog", "Status", "Korisnik", "Datum"), show="headings")
+        tv.column("ID", width=0, stretch=False)
+        for c in ("Nalog", "Status", "Korisnik", "Datum"): 
+            tv.heading(c, text=c)
+        tv.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        def ucitaj():
+            for i in tv.get_children(): tv.delete(i)
+            conn = sqlite3.connect(DB_NAME)
+            for r in conn.execute("SELECT id, rn_broj, status, korisnik, datum FROM radni_nalozi WHERE status='Otvoren' ORDER BY datum DESC"): tv.insert("", "end", values=r)
+            conn.close()
+
+        def zatvori_nalog():
+            sel = tv.focus()
+            if not sel: return
+            rn_id = tv.item(sel)['values'][0]
+            conn = sqlite3.connect(DB_NAME); conn.execute("UPDATE radni_nalozi SET status='Zatvoren' WHERE id=?", (rn_id,)); conn.commit(); conn.close(); ucitaj()
+
+        def obrisi_nalog():
+            sel = tv.focus()
+            if not sel: return
+            rn_id = tv.item(sel)['values'][0]
+            dlg = ModernConfirm(self, "Brisanje Naloga", "Obrisati nalog i vratiti robu u magacin?", "#ef4444")
+            if dlg.result:
+                conn = sqlite3.connect(DB_NAME)
+                for pid, kol in conn.execute("SELECT part_id, kolicina FROM rn_stavke WHERE rn_id=?", (rn_id,)).fetchall():
+                    conn.execute("UPDATE delovi SET stanje = stanje + ? WHERE id=?", (kol, pid))
+                conn.execute("DELETE FROM rn_stavke WHERE rn_id=?", (rn_id,))
+                conn.execute("DELETE FROM radni_nalozi WHERE id=?", (rn_id,))
+                conn.commit(); conn.close(); ucitaj()
+        ucitaj()
+
+    def otvori_istoriju(self):
+        self.ocisti_ekran(); self.napravi_naslov("Istorija Transakcija", self.otvori_glavni_meni)
+        if self.role == 'admin':
+            f_adm = tk.Frame(self.sadrzaj, bg=self.bg_panel); f_adm.pack(fill="x", padx=10, pady=5)
+            ttk.Button(f_adm, text="🗑️ OBRIŠI ZAPIS", style="Danger.TButton", command=lambda: obrisi_zapis()).pack(side="right", padx=10, pady=5)
+
+        tv = ttk.Treeview(self.sadrzaj, columns=("ID", "Deo", "Kol", "Tip", "Korisnik", "Datum", "Napomena"), show="headings")
+        tv.column("ID", width=0, stretch=False)
+        for c in ("Deo", "Kol", "Tip", "Korisnik", "Datum", "Napomena"): 
+            tv.heading(c, text=c)
+        tv.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        def ucitaj():
+            for i in tv.get_children(): tv.delete(i)
+            conn = sqlite3.connect(DB_NAME)
+            for r in conn.execute("SELECT t.id, d.naziv, t.kolicina, t.tip, t.korisnik, t.datum, t.napomena FROM transakcije t JOIN delovi d ON t.part_id=d.id ORDER BY t.datum DESC LIMIT 100"): tv.insert("", "end", values=r)
+            conn.close()
+
+        def obrisi_zapis():
+            sel = tv.focus()
+            if sel:
+                dlg = ModernConfirm(self, "Brisanje Loga", "Da li želite obrisati ovaj zapis iz istorije?", "#ef4444")
+                if dlg.result:
+                    conn = sqlite3.connect(DB_NAME); conn.execute("DELETE FROM transakcije WHERE id=?", (tv.item(sel)['values'][0],)); conn.commit(); conn.close(); ucitaj()
+        ucitaj()
+
+    # ==========================================
+    # PODEŠAVANJA SISTEMA (ADMIN)
+    # ==========================================
+    def otvori_podesavanja(self):
+        self.ocisti_ekran(); self.napravi_naslov("Glavna Podešavanja Sistema", self.otvori_glavni_meni)
+        
+        left_f = tk.Frame(self.sadrzaj, bg=self.bg_main); left_f.pack(side="left", fill="both", expand=True, padx=10)
+        right_f = tk.Frame(self.sadrzaj, bg=self.bg_panel, width=400); right_f.pack(side="right", fill="y", padx=10)
+
+        ttk.Label(left_f, text="Upravljanje Korisnicima", font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=10)
+        tv = ttk.Treeview(left_f, columns=("ID", "Korisnik", "Uloga"), show="headings", height=5)
+        for c in ("ID", "Korisnik", "Uloga"): tv.heading(c, text=c)
+        tv.pack(fill="x", pady=10)
+        
+        def ucitaj():
+            for i in tv.get_children(): tv.delete(i)
+            conn = sqlite3.connect(DB_NAME)
+            for r in conn.execute("SELECT id, username, uloga FROM korisnici"): tv.insert("", "end", values=r)
+            conn.close()
+        
+        f = tk.Frame(left_f, bg=self.bg_panel); f.pack(pady=10, fill="x")
+        tk.Label(f, text="Novi User:", bg=self.bg_panel, fg="white").pack(side="left", padx=5); u = ttk.Entry(f, width=15); u.pack(side="left", padx=5)
+        tk.Label(f, text="Pass:", bg=self.bg_panel, fg="white").pack(side="left", padx=5); p = ttk.Entry(f, width=15); p.pack(side="left", padx=5)
+        ttk.Button(f, text="➕ Dodaj", style="Success.TButton", command=lambda: dodaj(u.get(), p.get())).pack(side="left", padx=15)
+        ttk.Button(f, text="🗑️ Obriši", style="Danger.TButton", command=lambda: obrisi()).pack(side="right", padx=15)
+
+        def dodaj(user, pas):
+            if user and pas:
+                try:
+                    conn = sqlite3.connect(DB_NAME); conn.execute("INSERT INTO korisnici (username, password, uloga) VALUES (?, ?, 'tehnicar')", (user, pas))
+                    conn.commit(); conn.close(); ucitaj()
+                except: messagebox.showerror("Greška", "Korisnik postoji.")
+                
+        def obrisi():
+            sel = tv.focus()
+            if not sel: return
+            uid = tv.item(sel)['values'][0]
+            if uid == 1: return messagebox.showerror("Greška", "Admin se ne briše!")
+            conn = sqlite3.connect(DB_NAME); conn.execute("DELETE FROM korisnici WHERE id=?", (uid,)); conn.commit(); conn.close(); ucitaj()
+        ucitaj()
+
+        # FABRICKI RESET DEO
+        ttk.Label(right_f, text="Kritične Operacije", font=("Segoe UI", 16, "bold"), foreground="#ef4444").pack(pady=20)
+        
+        def promeni_pin():
+            stari = simpledialog.askstring("PIN", "Unesite TRENUTNI PIN za reset:", show='*')
+            if not stari: return
+            conn = sqlite3.connect(DB_NAME)
+            pravi = conn.execute("SELECT vrednost FROM podesavanja WHERE kljuc='reset_pin'").fetchone()[0]
+            if stari != pravi: return messagebox.showerror("Greška", "Pogrešan trenutni PIN!")
+            novi = simpledialog.askstring("Novi PIN", "Unesite NOVI PIN za reset:", show='*')
+            if novi:
+                conn.execute("UPDATE podesavanja SET vrednost=? WHERE kljuc='reset_pin'", (novi,))
+                conn.commit(); messagebox.showinfo("Uspeh", "PIN za fabrički reset je uspešno promenjen!")
+            conn.close()
+
+        def fabricki_reset():
+            pin = simpledialog.askstring("Fabrički Reset", "OVO BRIŠE SVE PODATKE!\nUnesite sigurnosni PIN:", show='*')
+            if not pin: return
+            conn = sqlite3.connect(DB_NAME)
+            pravi = conn.execute("SELECT vrednost FROM podesavanja WHERE kljuc='reset_pin'").fetchone()[0]
+            if pin != pravi:
+                conn.close(); return messagebox.showerror("Greška", "Pogrešan sigurnosni PIN!")
+            
+            dlg = ModernConfirm(self, "KONAČNA POTVRDA REOSTA", "Da li ste potpuno sigurni?\n\nSVI DELOVI, NALOZI, BUDŽET I ČEK LISTE BIĆE TRAJNO IZBRISANI!", "#ef4444")
+            if dlg.result:
+                tabele = ['delovi', 'transakcije', 'radni_nalozi', 'rn_stavke', 'pm_linije', 'pm_masine', 'pm_zadaci', 'pm_evidencija', 'budzet_odobren', 'budzet_potrosen']
+                for t in tabele: conn.execute(f"DELETE FROM {t}")
+                conn.execute("DELETE FROM sqlite_sequence WHERE name NOT IN ('korisnici', 'podesavanja')")
+                conn.execute("DELETE FROM korisnici WHERE uloga != 'admin'")
+                conn.commit(); conn.close()
+                messagebox.showinfo("Reset Završen", "Sistem je uspešno vraćen na fabrička podešavanja. Program će se sada izlogovati.")
+                self.show_login()
+            else:
+                conn.close()
+
+        ttk.Button(right_f, text="🔑 Promeni PIN za Reset", style="Warning.TButton", command=promeni_pin).pack(fill="x", padx=20, pady=10)
+        tk.Label(right_f, text="Upozorenje: Fabrički reset trajno briše celokupnu\nbazu, osim glavnog admin naloga i ovog PIN-a.", bg=self.bg_panel, fg="#a1a1aa", justify="center").pack(pady=10)
+        ttk.Button(right_f, text="☢️ FABRIČKI RESET SISTEMA", style="Danger.TButton", command=fabricki_reset).pack(fill="x", padx=20, pady=20)
+
+    # ==========================================
+    # PM ODRŽAVANJE - LOGIKA I EVIDENCIJA
+    # ==========================================
+    def dodaj_mesece(self, datum, meseci):
+        m = datum.month - 1 + meseci
+        g = datum.year + m // 12
+        m = m % 12 + 1
+        dani_u_mesecu = [31, 29 if g % 4 == 0 and (g % 100 != 0 or g % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        d = min(datum.day, dani_u_mesecu[m - 1])
+        return datetime.date(g, m, d)
+
+    def pm_get_status_and_date(self, z_id, tip_odrzavanja):
+        conn = sqlite3.connect(DB_NAME)
+        row = conn.execute("SELECT vrednost FROM podesavanja WHERE kljuc='pm_pocetak'").fetchone()
+        start_str = row[0] if row else "2026-01-01"
+        try: start_date = datetime.datetime.strptime(start_str, "%Y-%m-%d").date()
+        except: start_date = datetime.date.today()
+        
+        last_ev = conn.execute("SELECT datum, korisnik FROM pm_evidencija WHERE zadatak_id=? ORDER BY datum DESC LIMIT 1", (z_id,)).fetchone()
+        conn.close()
+
+        datum_odrade = "-"
+        korisnik = "-"
+        
+        if last_ev:
+            datum_odrade = last_ev[0].split(".")[0]
+            korisnik = last_ev[1]
+            try: last_date = datetime.datetime.strptime(last_ev[0].split(" ")[0], "%Y-%m-%d").date()
+            except: last_date = start_date
+            
+            if tip_odrzavanja == "Dnevno": next_date = last_date + datetime.timedelta(days=1)
+            elif tip_odrzavanja == "Nedeljno": next_date = last_date + datetime.timedelta(days=7)
+            elif tip_odrzavanja == "Mesečno": next_date = self.dodaj_mesece(last_date, 1)
+            elif tip_odrzavanja == "Kvartalno": next_date = self.dodaj_mesece(last_date, 3)
+            elif tip_odrzavanja == "Polugodišnje": next_date = self.dodaj_mesece(last_date, 6)
+            elif tip_odrzavanja == "Godišnje": next_date = self.dodaj_mesece(last_date, 12)
+            else: next_date = last_date + datetime.timedelta(days=365)
+        else:
+            next_date = start_date
+            
+        today = datetime.date.today()
+        date_str = next_date.strftime("%Y-%m-%d")
+        
+        if today >= next_date: return "Kasni ⚠️", date_str, datum_odrade, korisnik
+        else: return "U roku ☑", date_str, datum_odrade, korisnik
+
+    def otvori_pm_hub(self):
+        self.ocisti_ekran(); self.napravi_naslov("Preventivno Održavanje", self.otvori_glavni_meni)
+        conn = sqlite3.connect(DB_NAME)
+        linije = conn.execute("SELECT id, naziv, opis, ikona FROM pm_linije ORDER BY redosled, id").fetchall()
+        conn.close()
+        
+        stavke = [(ikona, n, o, lambda l=lid, naziv=n: self.otvori_pm_masine(l, naziv), self.accent) for lid, n, o, ikona in linije]
+        if self.role == "admin": 
+            stavke.append(("⚙️", "Podešavanja PM", "Ček-liste i Mašine", self.otvori_pm_podesavanja, "#10b981"))
+            stavke.append(("📊", "Izveštaj PM", "Status zadataka po linijama", self.otvori_pm_izvestaj, "#f59e0b"))
+        self.napravi_grid_meni(stavke)
+
+    def otvori_pm_masine(self, linija_id, linija_naziv):
+        self.ocisti_ekran(); self.napravi_naslov(f"Linija: {linija_naziv}", self.otvori_pm_hub)
+        conn = sqlite3.connect(DB_NAME)
+        masine = conn.execute("SELECT id, naziv FROM pm_masine WHERE linija_id=? ORDER BY redosled, id", (linija_id,)).fetchall()
+        conn.close()
+        self.napravi_grid_meni([("📋", n, "Ček lista", lambda m=mid, n=n: self.otvori_pm_cek(m, n, linija_id, linija_naziv), "#3b82f6") for mid, n in masine])
+
+    def otvori_pm_cek(self, masina_id, masina_naziv, l_id, l_naziv):
+        self.ocisti_ekran(); self.napravi_naslov(f"Ček lista: {masina_naziv}", lambda: self.otvori_pm_masine(l_id, l_naziv))
+        ttk.Label(self.sadrzaj, text="💡 Izaberite zadatak i koristite dugmiće ispod za evidenciju ili poništavanje.", font=("Segoe UI", 10, "italic"), foreground=self.text_muted).pack(pady=(0,5))
+
+        tv = ttk.Treeview(self.sadrzaj, columns=("ID", "R.br.", "Zadatak", "Periodika", "Rok", "Odrađeno dana", "Status"), show="headings", height=13)
+        tv.column("ID", width=0, stretch=False); tv.column("R.br.", width=50, anchor="center")
+        tv.column("Zadatak", width=350); tv.column("Periodika", width=100, anchor="center")
+        tv.column("Rok", width=100, anchor="center"); tv.column("Odrađeno dana", width=150, anchor="center")
+        tv.column("Status", width=120, anchor="center")
+        for c in ("ID", "R.br.", "Zadatak", "Periodika", "Rok", "Odrađeno dana", "Status"): tv.heading(c, text=c)
+        tv.tag_configure('URADJENO', foreground='#10b981'); tv.tag_configure('KASNI', foreground='#ef4444', font=("Segoe UI", 11, "bold"))
+        tv.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        def ucitaj():
+            for i in tv.get_children(): tv.delete(i)
+            conn = sqlite3.connect(DB_NAME)
+            zadaci = conn.execute("SELECT id, opis_zadatka, tip_odrzavanja FROM pm_zadaci WHERE masina_id=? ORDER BY redosled, id", (masina_id,)).fetchall()
+            conn.close()
+            rbr = 1
+            for z_id, opis, tip in zadaci:
+                status, rok_date, datum_odrade, kor = self.pm_get_status_and_date(z_id, tip)
+                tag = 'KASNI' if 'Kasni' in status else 'URADJENO'
+                tv.insert("", "end", values=(z_id, rbr, opis, tip, rok_date, datum_odrade, status), tags=(tag,))
+                rbr += 1
+                
+        btn_frame = tk.Frame(self.sadrzaj, bg=self.bg_main); btn_frame.pack(fill="x", padx=10, pady=10)
+        
+        def evidentiraj():
+            sel = tv.focus()
+            if not sel: return messagebox.showwarning("Greška", "Prvo kliknite na zadatak iznad koji želite da evidentirate.")
+            z_id = tv.item(sel)['values'][0]; naziv = tv.item(sel)['values'][2]
+            
+            dlg = ModernConfirm(self, "Potvrda Evidencije", f"Da li potvrđujete da je zadatak uspešno odrađen DANAS?\n\n'{naziv}'\n\nNovi rok će biti automatski izračunat na osnovu današnjeg datuma.", "#10b981")
+            if dlg.result:
+                conn = sqlite3.connect(DB_NAME)
+                conn.execute("INSERT INTO pm_evidencija (zadatak_id, status, korisnik, datum) VALUES (?, 'Urađeno', ?, datetime('now', 'localtime'))", (z_id, self.trenutni_korisnik))
+                conn.commit(); conn.close(); ucitaj()
+
+        def ponisti():
+            if self.role != 'admin': return messagebox.showerror("Zabranjeno", "Samo admin može poništiti unos!")
+            sel = tv.focus()
+            if not sel: return messagebox.showwarning("Greška", "Izaberite zadatak koji želite da raščekirate.")
+            z_id = tv.item(sel)['values'][0]; naziv = tv.item(sel)['values'][2]
+            
+            conn = sqlite3.connect(DB_NAME)
+            last = conn.execute("SELECT id, datum FROM pm_evidencija WHERE zadatak_id=? ORDER BY datum DESC LIMIT 1", (z_id,)).fetchone()
+            if not last: conn.close(); return messagebox.showinfo("Info", "Za ovaj zadatak ne postoji nijedna dosadašnja evidencija o radu.")
+            
+            dlg = ModernConfirm(self, "Poništavanje Zadnjeg Unosa", f"Da li ste sigurni da želite obrisati poslednji unos od:\n📅 {last[1]}\n\nZa zadatak: '{naziv}'?", "#ef4444")
+            if dlg.result:
+                conn.execute("DELETE FROM pm_evidencija WHERE id=?", (last[0],))
+                conn.commit(); conn.close(); ucitaj()
+            else: conn.close()
+
+        ttk.Button(btn_frame, text="✅ EVIDENTIRAJ ODRAĐENO (Završi)", style="Success.TButton", command=evidentiraj).pack(side="left", padx=10, expand=True, fill="x")
+        if self.role == 'admin': ttk.Button(btn_frame, text="❌ PONIŠTI ZADNJI UNOS (Raščekiraj)", style="Danger.TButton", command=ponisti).pack(side="right", padx=10, expand=True, fill="x")
+        ucitaj()
+
+    # --- IZVESTAJ ---
+    def otvori_pm_izvestaj(self):
+        self.ocisti_ekran(); self.napravi_naslov("Izveštaj Preventivnog Održavanja", self.otvori_pm_hub)
+        f_top = tk.Frame(self.sadrzaj, bg=self.bg_panel); f_top.pack(fill="x", padx=10, pady=10)
+        ttk.Label(f_top, text="Izaberite liniju: ").pack(side="left", padx=10, pady=10)
+        
+        conn = sqlite3.connect(DB_NAME)
+        linije = conn.execute("SELECT id, naziv FROM pm_linije ORDER BY redosled, id").fetchall()
+        conn.close()
+        
+        lin_map = {naziv: lid for lid, naziv in linije}
+        cb_lin = ttk.Combobox(f_top, values=list(lin_map.keys()), state="readonly", width=30)
+        cb_lin.pack(side="left", padx=10, pady=10)
+        
+        tv = ttk.Treeview(self.sadrzaj, columns=("R.br.", "Mašina", "Zadatak", "Periodika", "Rok", "Odrađeno", "Korisnik", "Status"), show="headings", height=20)
+        for c in ("R.br.", "Mašina", "Zadatak", "Periodika", "Rok", "Odrađeno", "Korisnik", "Status"): tv.heading(c, text=c)
+        
+        tv.column("R.br.", width=50, anchor="center"); tv.column("Mašina", width=150)
+        tv.column("Zadatak", width=250); tv.column("Periodika", width=90, anchor="center")
+        tv.column("Rok", width=90, anchor="center"); tv.column("Odrađeno", width=130, anchor="center")
+        tv.column("Korisnik", width=90, anchor="center"); tv.column("Status", width=90, anchor="center")
+        
+        tv.tag_configure('URADJENO', foreground='#10b981'); tv.tag_configure('KASNI', foreground='#ef4444', font=("Segoe UI", 11, "bold"))
+        tv.pack(fill="both", expand=True, padx=10, pady=10)
+
+        def prikazi_izvestaj(event=None):
+            for i in tv.get_children(): tv.delete(i)
+            l_naziv = cb_lin.get()
+            if not l_naziv: return
+            lid = lin_map[l_naziv]
+            
+            conn = sqlite3.connect(DB_NAME)
+            masine = conn.execute("SELECT id, naziv FROM pm_masine WHERE linija_id=? ORDER BY redosled, id", (lid,)).fetchall()
+            rbr = 1
+            for m_id, m_naziv in masine:
+                zadaci = conn.execute("SELECT id, opis_zadatka, tip_odrzavanja FROM pm_zadaci WHERE masina_id=? ORDER BY redosled, id", (m_id,)).fetchall()
+                for z_id, opis, tip in zadaci:
+                    status, rok_date, datum_odrade, korisnik = self.pm_get_status_and_date(z_id, tip)
+                    tag = 'KASNI' if 'Kasni' in status else 'URADJENO'
+                    tv.insert("", "end", values=(rbr, m_naziv, opis, tip, rok_date, datum_odrade, korisnik, status), tags=(tag,))
+                    rbr += 1
+            conn.close()
+        cb_lin.bind("<<ComboboxSelected>>", prikazi_izvestaj)
+
+    # --- PODEŠAVANJA PM ---
+    def otvori_pm_podesavanja(self):
+        self.ocisti_ekran(); self.napravi_naslov("Podešavanja PM", self.otvori_pm_hub)
+        
+        f_pocetak = tk.Frame(self.sadrzaj, bg=self.bg_panel); f_pocetak.pack(fill="x", padx=10, pady=(0,10))
+        conn = sqlite3.connect(DB_NAME); row = conn.execute("SELECT vrednost FROM podesavanja WHERE kljuc='pm_pocetak'").fetchone(); conn.close()
+        trenutni_pocetak = row[0] if row else str(datetime.date.today())
+        
+        tk.Label(f_pocetak, text="Datum kada kreće preventivno (YYYY-MM-DD):", bg=self.bg_panel, fg="white", font=("Segoe UI", 11, "bold")).pack(side="left", padx=10, pady=10)
+        e_pocetak = ttk.Entry(f_pocetak, width=15); e_pocetak.insert(0, trenutni_pocetak); e_pocetak.pack(side="left", padx=10)
+        
+        def sacuvaj_pocetak():
+            try: datetime.datetime.strptime(e_pocetak.get(), "%Y-%m-%d")
+            except: return messagebox.showerror("Greška", "Datum mora biti u formatu YYYY-MM-DD")
+            c = sqlite3.connect(DB_NAME); c.execute("UPDATE podesavanja SET vrednost=? WHERE kljuc='pm_pocetak'", (e_pocetak.get(),)); c.commit(); c.close()
+            messagebox.showinfo("Uspeh", "Datum sačuvan!")
+            
+        ttk.Button(f_pocetak, text="💾 Sačuvaj Datum", style="Success.TButton", command=sacuvaj_pocetak).pack(side="left", padx=10)
+
+        f_main = tk.Frame(self.sadrzaj, bg=self.bg_main); f_main.pack(fill="both", expand=True)
+        f_lin = tk.Frame(f_main, bg=self.bg_panel, width=300); f_lin.pack(side="left", fill="y", padx=10)
+        f_mas = tk.Frame(f_main, bg=self.bg_panel, width=300); f_mas.pack(side="left", fill="y", padx=10)
+        f_zad = tk.Frame(f_main, bg=self.bg_panel); f_zad.pack(side="left", fill="both", expand=True, padx=10)
+
+        ttk.Label(f_lin, text="1. Linije", font=("Segoe UI", 14, "bold")).pack(pady=5)
+        tv_lin = ttk.Treeview(f_lin, columns=("ID", "R.br.", "Naziv", "Ikona"), show="headings")
+        tv_lin.heading("R.br.", text="R.br."); tv_lin.heading("Naziv", text="Linija"); tv_lin.heading("Ikona", text="Ikona")
+        tv_lin.column("ID", width=0, stretch=False); tv_lin.column("R.br.", width=40, anchor="center"); tv_lin.column("Ikona", width=50, anchor="center"); tv_lin.pack(fill="both", expand=True)
+        
+        ttk.Label(f_mas, text="2. Mašine", font=("Segoe UI", 14, "bold")).pack(pady=5)
+        tv_mas = ttk.Treeview(f_mas, columns=("ID", "R.br.", "Naziv"), show="headings")
+        tv_mas.heading("R.br.", text="R.br."); tv_mas.heading("Naziv", text="Mašina"); 
+        tv_mas.column("ID", width=0, stretch=False); tv_mas.column("R.br.", width=40, anchor="center"); tv_mas.pack(fill="both", expand=True)
+        
+        ttk.Label(f_zad, text="3. Zadaci (Ček-lista)", font=("Segoe UI", 14, "bold")).pack(pady=5)
+        tv_zad = ttk.Treeview(f_zad, columns=("ID", "R.br.", "Zadatak", "Periodika"), show="headings")
+        tv_zad.heading("R.br.", text="R.br."); tv_zad.heading("Zadatak", text="Zadatak"); tv_zad.heading("Periodika", text="Periodika")
+        tv_zad.column("ID", width=0, stretch=False); tv_zad.column("R.br.", width=40, anchor="center"); tv_zad.column("Zadatak", width=300); tv_zad.pack(fill="both", expand=True)
+
+        def ucitaj_linije():
+            for i in tv_lin.get_children(): tv_lin.delete(i)
+            conn = sqlite3.connect(DB_NAME)
+            rbr = 1
+            for r in conn.execute("SELECT id, naziv, ikona FROM pm_linije ORDER BY redosled, id"):
+                tv_lin.insert("", "end", values=(r[0], rbr, r[1], r[2]))
+                rbr += 1
+            conn.close()
+
+        def ucitaj_masine(e):
+            for i in tv_mas.get_children(): tv_mas.delete(i)
+            for i in tv_zad.get_children(): tv_zad.delete(i)
+            sel = tv_lin.focus()
+            if not sel: return
+            lid = tv_lin.item(sel)['values'][0]
+            conn = sqlite3.connect(DB_NAME)
+            rbr = 1
+            for r in conn.execute("SELECT id, naziv FROM pm_masine WHERE linija_id=? ORDER BY redosled, id", (lid,)):
+                tv_mas.insert("", "end", values=(r[0], rbr, r[1]))
+                rbr += 1
+            conn.close()
+
+        def ucitaj_zadatke(e):
+            for i in tv_zad.get_children(): tv_zad.delete(i)
+            sel = tv_mas.focus()
+            if not sel: return
+            mid = tv_mas.item(sel)['values'][0]
+            conn = sqlite3.connect(DB_NAME)
+            rbr = 1
+            for r in conn.execute("SELECT id, opis_zadatka, tip_odrzavanja FROM pm_zadaci WHERE masina_id=? ORDER BY redosled, id", (mid,)):
+                tv_zad.insert("", "end", values=(r[0], rbr, r[1], r[2]))
+                rbr += 1
+            conn.close()
+
+        tv_lin.bind('<<TreeviewSelect>>', ucitaj_masine)
+        tv_mas.bind('<<TreeviewSelect>>', ucitaj_zadatke)
+        
+        def pomeri(tv, tabela, smer):
+            sel = tv.focus()
+            if not sel: return
+            target = tv.prev(sel) if smer == -1 else tv.next(sel)
+            if not target: return
+            items = list(tv.get_children())
+            idx1 = items.index(sel)
+            idx2 = items.index(target)
+            items[idx1], items[idx2] = items[idx2], items[idx1]
+            
+            conn = sqlite3.connect(DB_NAME)
+            for i, item in enumerate(items):
+                item_id = tv.item(item)['values'][0]
+                conn.execute(f"UPDATE {tabela} SET redosled=? WHERE id=?", (i, item_id))
+            conn.commit(); conn.close()
+            
+            target_id = tv.item(sel)['values'][0]
+            if tabela == 'pm_linije': ucitaj_linije()
+            elif tabela == 'pm_masine': ucitaj_masine(None)
+            elif tabela == 'pm_zadaci': ucitaj_zadatke(None)
+            
+            for child in tv.get_children():
+                if tv.item(child)['values'][0] == target_id:
+                    tv.selection_set(child); tv.focus(child)
+                    break
+
+        def izmeni(tv, tabela):
+            sel = tv.focus()
+            if not sel: return messagebox.showwarning("Greška", "Izaberite stavku!")
+            item_id = tv.item(sel)['values'][0]
+            trenutni_naziv = tv.item(sel)['values'][2]
+            
+            w = tk.Toplevel(self); w.title("Izmena"); w.configure(bg=self.bg_panel)
+            tk.Label(w, text="Novi Naziv/Opis:", bg=self.bg_panel, fg="white").pack(pady=5)
+            e = ttk.Entry(w, width=40); e.insert(0, trenutni_naziv); e.pack(pady=5)
+            
+            cb_dodatak = None
+            if tabela == 'pm_linije':
+                ikona = tv.item(sel)['values'][3]
+                tk.Label(w, text="Ikona:", bg=self.bg_panel, fg="white").pack(pady=5)
+                cb_dodatak = ttk.Combobox(w, values=["🏭", "⚙️", "🌊", "⚡", "💨", "📦"], state="readonly")
+                if ikona in cb_dodatak['values']: cb_dodatak.set(ikona)
+                cb_dodatak.pack(pady=5)
+            elif tabela == 'pm_zadaci':
+                periodika = tv.item(sel)['values'][3]
+                tk.Label(w, text="Periodika:", bg=self.bg_panel, fg="white").pack(pady=5)
+                cb_dodatak = ttk.Combobox(w, values=["Dnevno", "Nedeljno", "Mesečno", "Kvartalno", "Polugodišnje", "Godišnje"], state="readonly")
+                if periodika in cb_dodatak['values']: cb_dodatak.set(periodika)
+                cb_dodatak.pack(pady=5)
+                
+            def spasi():
+                if not e.get(): return
+                conn = sqlite3.connect(DB_NAME)
+                if tabela == 'pm_linije': conn.execute("UPDATE pm_linije SET naziv=?, ikona=? WHERE id=?", (e.get(), cb_dodatak.get(), item_id)); ucitaj_linije()
+                elif tabela == 'pm_masine': conn.execute("UPDATE pm_masine SET naziv=? WHERE id=?", (e.get(), item_id)); ucitaj_masine(None)
+                elif tabela == 'pm_zadaci': conn.execute("UPDATE pm_zadaci SET opis_zadatka=?, tip_odrzavanja=? WHERE id=?", (e.get(), cb_dodatak.get(), item_id)); ucitaj_zadatke(None)
+                conn.commit(); conn.close(); w.destroy()
+            ttk.Button(w, text="Sačuvaj izmene", style="Info.TButton", command=spasi).pack(pady=15)
+
+        def unesi(tabela):
+            w = tk.Toplevel(self); w.title("Dodaj"); w.configure(bg=self.bg_panel)
+            tk.Label(w, text="Naziv/Opis:", bg=self.bg_panel, fg="white").pack(pady=5); e = ttk.Entry(w); e.pack(pady=5)
+            cb_dodatak = None
+            if tabela == 'pm_linije':
+                tk.Label(w, text="Ikona linije:", bg=self.bg_panel, fg="white").pack(pady=5)
+                cb_dodatak = ttk.Combobox(w, values=["🏭", "⚙️", "🌊", "⚡", "💨", "📦"], state="readonly")
+                cb_dodatak.current(0); cb_dodatak.pack(pady=5)
+            elif tabela == 'pm_zadaci':
+                tk.Label(w, text="Periodika:", bg=self.bg_panel, fg="white").pack(pady=5)
+                cb_dodatak = ttk.Combobox(w, values=["Dnevno", "Nedeljno", "Mesečno", "Kvartalno", "Polugodišnje", "Godišnje"], state="readonly")
+                cb_dodatak.current(1); cb_dodatak.pack(pady=5)
+            
+            def spasi():
+                if not e.get(): return
+                conn = sqlite3.connect(DB_NAME)
+                if tabela == 'pm_linije': conn.execute("INSERT INTO pm_linije (naziv, opis, ikona) VALUES (?, '', ?)", (e.get(), cb_dodatak.get())); ucitaj_linije()
+                elif tabela == 'pm_masine': 
+                    lid = tv_lin.item(tv_lin.focus())['values'][0]; conn.execute("INSERT INTO pm_masine (linija_id, naziv) VALUES (?, ?)", (lid, e.get())); ucitaj_masine(None)
+                elif tabela == 'pm_zadaci': 
+                    mid = tv_mas.item(tv_mas.focus())['values'][0]; conn.execute("INSERT INTO pm_zadaci (masina_id, opis_zadatka, tip_odrzavanja) VALUES (?, ?, ?)", (mid, e.get(), cb_dodatak.get())); ucitaj_zadatke(None)
+                conn.commit(); conn.close(); w.destroy()
+            ttk.Button(w, text="Sačuvaj", style="Success.TButton", command=spasi).pack(pady=15)
+
+        def brisi(tv, tabela):
+            sel = tv.focus()
+            if not sel: return messagebox.showwarning("Greška", "Izaberite stavku!")
+            dlg = ModernConfirm(self, "Brisanje PM Stavke", "Sigurno brišete stavku i sve njene zavisnosti iz PM baze?", "#ef4444")
+            if dlg.result:
+                conn = sqlite3.connect(DB_NAME)
+                conn.execute(f"DELETE FROM {tabela} WHERE id=?", (tv.item(sel)['values'][0],))
+                conn.commit(); conn.close()
+                if tabela == 'pm_linije': ucitaj_linije()
+                elif tabela == 'pm_masine': ucitaj_masine(None)
+                elif tabela == 'pm_zadaci': ucitaj_zadatke(None)
+
+        def kreiraj_kontrole(parent, tv, tabela, dodaj_cmd):
+            f = tk.Frame(parent, bg=self.bg_panel); f.pack(fill="x", pady=2)
+            tk.Button(f, text="⬆️", font=("Segoe UI", 12), bg="#3f3f46", fg="white", relief="flat", command=lambda: pomeri(tv, tabela, -1)).pack(side="left", fill="x", expand=True, padx=2)
+            tk.Button(f, text="⬇️", font=("Segoe UI", 12), bg="#3f3f46", fg="white", relief="flat", command=lambda: pomeri(tv, tabela, 1)).pack(side="left", fill="x", expand=True, padx=2)
+            ttk.Button(f, text="✏️ Izmeni", style="Info.TButton", command=lambda: izmeni(tv, tabela)).pack(side="left", fill="x", expand=True, padx=2)
+            
+            f2 = tk.Frame(parent, bg=self.bg_panel); f2.pack(fill="x", pady=2)
+            ttk.Button(f2, text="➕ Dodaj", command=dodaj_cmd).pack(side="left", fill="x", expand=True, padx=2)
+            ttk.Button(f2, text="🗑️ Obriši", style="Danger.TButton", command=lambda: brisi(tv, tabela)).pack(side="left", fill="x", expand=True, padx=2)
+
+        kreiraj_kontrole(f_lin, tv_lin, 'pm_linije', lambda: unesi('pm_linije'))
+        kreiraj_kontrole(f_mas, tv_mas, 'pm_masine', lambda: unesi('pm_masine'))
+        kreiraj_kontrole(f_zad, tv_zad, 'pm_zadaci', lambda: unesi('pm_zadaci'))
+        
+        ucitaj_linije()
+
+if __name__ == "__main__":
+    app = PPM_App()
+    app.mainloop()
