@@ -12,6 +12,13 @@ def database_url():
     load_dotenv(ROOT / '.env', override=False)
     value = os.environ.get('DATABASE_URL', '').strip()
     if not value:
+        try:
+            import streamlit as st
+            if 'DATABASE_URL' in st.secrets:
+                value = str(st.secrets['DATABASE_URL']).strip()
+        except Exception:
+            pass
+    if not value:
         raise RuntimeError('DATABASE_URL nije podešen. Aplikacija neće kreirati zamensku lokalnu bazu.')
     return value
 
