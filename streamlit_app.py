@@ -300,9 +300,9 @@ def admin_page(svc, token):
 def main():
     try:
         svc = backend()
-    except (RuntimeError, SQLAlchemyError):
-        st.error('Centralna baza nije dostupna ili nije inicijalizovana. Proverite serversku konfiguraciju i migracije.')
-        st.info('Kontaktirajte administratora. Unosi se ne preusmeravaju u drugu bazu.')
+    except Exception as exc:
+        st.error(f'Greška pri povezivanju sa bazom: {exc}')
+        st.info('Proverite DATABASE_URL u Secrets podešavanjima.')
         return
     if flash := st.session_state.pop('flash', None):
         st.success(flash)

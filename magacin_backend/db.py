@@ -30,8 +30,11 @@ def engine_for(url=None):
         parsed = parsed.set(drivername='postgresql+psycopg')
     if parsed.get_backend_name() != 'postgresql':
         raise RuntimeError('Ova aplikacija koristi isključivo centralnu PostgreSQL bazu.')
+    connect_args = {'connect_timeout': 10}
+    if parsed.host and parsed.host != '127.0.0.1' and parsed.host != 'localhost':
+        connect_args['sslmode'] = 'require'
     return create_engine(parsed, pool_pre_ping=True, pool_size=5, max_overflow=5,
-                         connect_args={'connect_timeout': 10}, hide_parameters=True)
+                         connect_args=connect_args, hide_parameters=True)
 
 
 def identity(engine):
