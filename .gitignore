@@ -15,4 +15,5 @@ test-results/
 credentials-local.txt
 dist/
 backup_original/
+v2/
 

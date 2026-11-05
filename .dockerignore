@@ -1,0 +1,15 @@
+*
+!requirements.lock.txt
+!magacin_backend/
+!magacin_backend/**
+!migrations/
+!migrations/**
+!.streamlit/
+!.streamlit/config.toml
+!alembic.ini
+!manage.py
+!streamlit_app.py
+!start_server.py
+!Dockerfile
+**/__pycache__/**
+

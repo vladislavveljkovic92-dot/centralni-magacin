@@ -5,6 +5,7 @@ from datetime import date
 from decimal import Decimal
 
 import streamlit as st
+import streamlit.components.v1 as components
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -297,6 +298,22 @@ def admin_page(svc, token):
         table(svc.read_table(token, 'archive'), 'legacy_arhiva')
 
 
+def history_page(svc, token):
+    rows = svc.read_table(token, 'history')  # najnoviji prvi (ORDER BY created_at DESC)
+    if not rows:
+        st.info('Nema zapisa.')
+        return
+    needle = st.text_input('Pretraga po bilo kojoj koloni', key='history_filter').strip().casefold()
+    if needle:
+        rows = [r for r in rows if any(needle in str(v).casefold() for v in r.values())]
+    total = len(rows)
+    limit = st.selectbox('Prikaz zapisa (najnoviji prvi)', ['100', '250', '500', '1000', 'Sve'],
+                         index=0, key='history_limit')
+    shown = rows if limit == 'Sve' else rows[:int(limit)]
+    st.caption(f'Prikazano {len(shown)} od {total} zapisa.')
+    table(shown, 'istorija')
+
+
 def main():
     try:
         svc = backend()
@@ -319,6 +336,9 @@ def main():
                 st.rerun()
             except BusinessError as exc:
                 st.error(str(exc))
+        st.caption('Ako polja ne reaguju na klik (povremeni problem hostinga), osvežite stranicu.')
+        if st.button('Osveži stranicu'):
+            components.html('window.parent.location.reload()', height=0)
         return
     try:
         actor = svc.actor(token)
@@ -353,7 +373,7 @@ def main():
     elif page == 'Preventivno održavanje':
         maintenance_page(svc, token, actor)
     elif page == 'Istorija':
-        table(svc.read_table(token, 'history'), 'istorija')
+        history_page(svc, token)
     elif page == 'Administracija':
         admin_page(svc, token)
     else:

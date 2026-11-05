@@ -40,7 +40,7 @@ Docker alternativa je u `compose.yaml`. Baza koristi trajni volume i nema objavl
 
 ## Instalacija i administracija
 
-Podržano/testirano okruženje: Python 3.13.18 i PostgreSQL 17. Koristite `requirements.lock.txt` za ponovljivo serversko okruženje.
+Podržano/testirano okruženje: Python 3.13.14 (lokalno, `pytest` 16/16) i PostgreSQL 17; aplikacija je testirana i na Streamlit Cloud okruženju (Python 3.14). Koristite `requirements.lock.txt` za ponovljivo serversko okruženje.
 
 ```powershell
 python -m venv .venv
@@ -77,7 +77,8 @@ Za Render sa zatvorenom javnom bazom, import pokrenuti unutar serverskog okruže
 Na administrativnom računaru sa PostgreSQL klijentom iste ili novije glavne verzije:
 
 ```powershell
-.venv\Scripts\python.exe backup_database.py --pg-bin .local\pgsql\bin
+# pg_dump iz PostgreSQL 17 (instaliran preko winget-a); --pg-bin nije potreban ako je putanja u PATH-u
+.venv\Scripts\python.exe backup_database.py --pg-bin "C:\Program Files\PostgreSQL\17\bin"
 ```
 
 Nastaju custom-format `.dump` i SHA-256 fajl. Lozinka se prosleđuje pg_dump procesu kroz okruženje, bez kredencijala u komandnoj liniji. Bekapi sadrže poslovne podatke i heševe lozinki; čuvajte ih u zaštićenom odvojenom skladištu. Za probno vraćanje napravite NOVU praznu test bazu i koristite `pg_restore --no-owner --no-acl` sa PGHOST/PGUSER/PGPASSWORD/PGDATABASE podešenim na tu test bazu. Ne vraćati preko aktivne produkcijske baze. Lokalno je provereno vraćanje kompletnog dump-a u zasebnu test bazu i poređenje broja zapisa.

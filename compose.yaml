@@ -1,0 +1,32 @@
+# Local/personal server deployment. Internet exposure requires HTTPS at a reverse proxy.
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: magacin
+      POSTGRES_USER: magacin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a unique database password}
+    volumes:
+      - central_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U magacin -d magacin"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8501:8501"
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg://magacin:${POSTGRES_PASSWORD:?Set database password}@db:5432/magacin
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set a unique administrator password}
+    depends_on:
+      db:
+        condition: service_healthy
+volumes:
+  central_data:
+
