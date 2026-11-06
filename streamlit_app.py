@@ -173,6 +173,26 @@ div[data-testid="stExpander"] summary { color: #FFFFFF !important; }
 [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked)::before {
     background: #D6B25E; color: #171A45;
 }
+
+/* ===== CRVENA ZONA: fabrički reset i trajno brisanje dela ===== */
+/* Forma koja nosi marker span.zona-opasno dobija crvenu ivicu i crveno dugme. */
+div[data-testid="stForm"]:has(span.zona-opasno) {
+    border-color: rgba(255, 102, 102, 0.55) !important;
+    box-shadow: 0 18px 45px rgba(140, 20, 30, 0.35) !important;
+}
+div[data-testid="stForm"]:has(span.zona-opasno) [data-testid="stFormSubmitButton"] button,
+div[data-testid="stForm"]:has(span.zona-opasno) button[data-testid="stFormSubmitButton"] {
+    background: linear-gradient(180deg, #E4574F 0%, #A62B33 100%) !important;
+    color: #FFFFFF !important;
+    border: 1px solid rgba(255, 255, 255, 0.35) !important;
+}
+div[data-testid="stForm"]:has(span.zona-opasno) [data-testid="stFormSubmitButton"] button:hover,
+div[data-testid="stForm"]:has(span.zona-opasno) button[data-testid="stFormSubmitButton"]:hover {
+    filter: brightness(1.1);
+    box-shadow: 0 8px 24px rgba(166, 43, 51, 0.55);
+}
+span.zona-opasno { display: none; }
+/* Naslov crvene forme (expander) — upozorenje ostaje u paleti */
 </style>
 """
 st.markdown(STIL, unsafe_allow_html=True)
@@ -267,16 +287,17 @@ def password_page(svc, token):
 
 def inventory_page(svc, token, actor):
     st.header('Zalihe')
-    rows = svc.list_parts(token, include_inactive=actor['role'] == 'admin')
+    is_admin = actor['role'] == 'admin'
+    rows = svc.list_parts(token, include_inactive=is_admin)
     search = st.text_input('Pretraga po šifri, nazivu ili kategoriji').casefold()
     only_low = st.checkbox('Samo delovi na minimumu ili ispod minimuma')
     display = [r for r in rows if search in f'{r["part_number"]} {r["name"]} {r["category"]}'.casefold()
                and (not only_low or (r['active'] and r['stock'] <= r['minimum']))]
     table(display, 'zalihe')
-    if actor['role'] != 'admin':
-        return
-    with st.expander('Novi deo / izmena dela'):
-        chosen = select_record('Deo za izmenu', rows, lambda r: f'{r["part_number"]} — {r["name"]}', 'edit_part', True)
+    with st.expander('Novi deo / izmena dela' if is_admin else 'Novi deo'):
+        # Tehnicar samo dodaje nove delove; izmena postojećeg je pravo administratora.
+        chosen = (select_record('Deo za izmenu', rows, lambda r: f'{r["part_number"]} — {r["name"]}',
+                                'edit_part', True) if is_admin else None)
         base = chosen or {}
         form_key = 'part_' + str(base.get('id', 'new'))
         with st.form(form_key):
@@ -286,11 +307,27 @@ def inventory_page(svc, token, actor):
             minimum = st.number_input('Minimalna zaliha', min_value=0, value=base.get('minimum', 0), step=1)
             price = st.number_input('Referentna cena (RSD)', min_value=0.0, value=float(base.get('price', 0)), step=0.01)
             supplier = st.text_input('Dobavljač', base.get('supplier', ''))
-            active = st.checkbox('Aktivan', value=base.get('active', True))
+            active = st.checkbox('Aktivan', value=base.get('active', True)) if is_admin else True
             submit = st.form_submit_button('Sačuvaj deo')
         if submit:
             perform(form_key, lambda rid: svc.save_part(token, rid, pn, name, category, minimum, price,
                     supplier, part_id=base.get('id'), active=active))
+    if is_admin and rows:
+        with st.expander('Trajno brisanje dela'):
+            st.caption('Deo se može trajno obrisati samo ako nema istoriju (kretanja, nalozi, nabavke) '
+                       'i ako je stanje nula. U suprotnom ga arhivirajte.')
+            with st.form('delete_part', clear_on_submit=True):
+                st.markdown('<span class="zona-opasno"></span>', unsafe_allow_html=True)
+                target = select_record('Deo za brisanje', rows,
+                                       lambda r: f'{r["part_number"]} — {r["name"]} (stanje {r["stock"]})', 'delete_sel')
+                confirmed = st.checkbox('Potvrđujem trajno brisanje ovog dela')
+                submit = st.form_submit_button('Obriši deo')
+            if submit:
+                if not confirmed:
+                    st.error('Potvrdite trajno brisanje dela.')
+                else:
+                    perform('delete_part', lambda rid: svc.delete_part(token, rid, target['id']),
+                            message='Deo je trajno obrisan iz baze.')
 
 
 def receipts_page(svc, token):
@@ -454,6 +491,21 @@ def admin_page(svc, token):
         submit = st.form_submit_button('Sačuvaj korisnika')
     if submit:
         perform('user', lambda rid: svc.save_user(token, rid, username, password, role, active))
+    with st.expander('Fabrički reset baze'):
+        st.warning('Fabrički reset trajno briše SVE poslovne podatke (delove, istoriju, naloge, nabavke, '
+                   'budžet, preventivno održavanje, arhivu) i sve naloge osim administratorskih. '
+                   'Nije ga moguće poništiti.')
+        with st.form('factory_reset', clear_on_submit=True):
+            st.markdown('<span class="zona-opasno"></span>', unsafe_allow_html=True)
+            code = st.text_input('Šifra za fabrički reset', type='password')
+            confirmed = st.checkbox('Potvrđujem da želim trajno obrisati sve poslovne podatke')
+            submit = st.form_submit_button('Fabrički reset')
+        if submit:
+            if not confirmed:
+                st.error('Potvrdite fabrički reset u checkboxu.')
+            else:
+                perform('reset', lambda rid: svc.factory_reset(token, rid, code),
+                        message='Fabrički reset je izvršen. Baza je prazna, administratorski nalozi ostaju.')
     with st.expander('Revizijski trag'):
         table(svc.read_table(token, 'audit'), 'audit')
     with st.expander('Arhiva prenetih podataka (uključuje stare kvarove, rezervacije i komplete)'):

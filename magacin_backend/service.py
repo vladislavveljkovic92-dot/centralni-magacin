@@ -16,6 +16,8 @@ from . import schema as s
 
 LOCAL_TZ = ZoneInfo('Europe/Budapest')
 PERIODS = ['Dnevno', 'Nedeljno', 'Mesečno', 'Kvartalno', 'Polugodišnje', 'Godišnje']
+# Šifra potvrde za fabrički reset (vidi Warehouse.factory_reset).
+RESET_CODE = '300120'
 
 
 class BusinessError(ValueError):
@@ -244,7 +246,48 @@ class Warehouse:
             else:
                 c.execute(insert(s.parts).values(id=pid, stock=0, purpose='', image_path='', **data))
             return {'id': pid}
-        return self._write(token, request_id, 'save_part', {**data, 'part_id': part_id}, perform, admin=True)
+        # Novi deo sme da doda i tehnicar; izmena postojećeg zahteva admina.
+        return self._write(token, request_id, 'save_part', {**data, 'part_id': part_id}, perform,
+                           admin=(part_id is not None))
+
+    def delete_part(self, token, request_id, part_id):
+        """Trajno brisanje dela — dozvoljeno samo ako deo nema nikakvu istoriju."""
+        def perform(c, actor):
+            row = c.execute(select(s.parts).where(s.parts.c.id == part_id).with_for_update()).mappings().first()
+            if not row:
+                raise BusinessError('Deo ne postoji.')
+            movements = c.scalar(select(func.count()).select_from(s.movements)
+                                 .where(s.movements.c.part_id == part_id))
+            items = c.scalar(select(func.count()).select_from(s.order_items)
+                             .where(s.order_items.c.part_id == part_id))
+            purchases = c.scalar(select(func.count()).select_from(s.purchases)
+                                 .where(s.purchases.c.part_id == part_id))
+            if movements or items or purchases:
+                raise BusinessError('Deo ima istoriju (kretanja zalihâ, nalozi ili nabavke) '
+                                    'i ne može se trajno obrisati. Koristite arhiviranje.')
+            if row['stock']:
+                raise BusinessError('Deo ima zalihšu na stanju i ne može se trajno obrisati.')
+            c.execute(s.parts.delete().where(s.parts.c.id == part_id))
+            return {'id': part_id}
+        return self._write(token, request_id, 'delete_part', {'part_id': part_id}, perform, admin=True)
+
+    def factory_reset(self, token, request_id, code):
+        """Fabrički reset: briše sve poslovne podatke i sve korisnike osim admina."""
+        def perform(c, actor):
+            if str(code or '').strip() != RESET_CODE:
+                raise BusinessError('Pogrešna šifra za fabrički reset.')
+            # Redosled po stranim ključevima: prvo ono što na nešto referencira.
+            for table in (s.movements, s.order_items, s.purchases, s.orders,
+                          s.maintenance_logs, s.tasks, s.machines, s.lines,
+                          s.parts, s.budgets, s.audit, s.archive, s.imports,
+                          s.operations, s.attempts):
+                c.execute(table.delete())
+            # Korisnici: ostaju samo admini (i njihove sesije, da admin ne bude odjavljen).
+            admin_ids = select(s.users.c.id).where(s.users.c.role == 'admin')
+            c.execute(s.sessions.delete().where(s.sessions.c.user_id.not_in(admin_ids)))
+            c.execute(s.users.delete().where(s.users.c.role != 'admin'))
+            return {'id': 'factory_reset'}
+        return self._write(token, request_id, 'factory_reset', {}, perform, admin=True)
 
     def _part(self, c, part_id, lock=False):
         q = select(s.parts).where(s.parts.c.id == part_id, s.parts.c.active.is_(True))

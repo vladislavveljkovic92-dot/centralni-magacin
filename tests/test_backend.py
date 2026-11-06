@@ -160,8 +160,14 @@ def test_roles_password_hashes_and_session_revocation(warehouse):
     with pytest.raises(BusinessError, match='Sesija'):
         svc.actor(token)
     token = svc.login('tech', 'new-password-for-tech-2026')
+    # Tehnicar sme da doda NOVI deo, ali ne i da menja postojeći (izmena = admin).
+    new_id = svc.save_part(token, uid(), 'TECH-PN', 'Tehničar deo', 'Kat', 0, 0)['id']
     with pytest.raises(BusinessError, match='administrator'):
-        svc.save_part(token, uid(), 'PN', 'Naziv', 'Kat', 0, 0)
+        svc.save_part(token, uid(), 'PN', 'Naziv', 'Kat', 0, 0, part_id=new_id)
+    with pytest.raises(BusinessError, match='administrator'):
+        svc.delete_part(token, uid(), new_id)
+    with pytest.raises(BusinessError, match='administrator'):
+        svc.factory_reset(token, uid(), '300120')
     with pytest.raises(BusinessError):
         svc.read_table(token, 'users')
     svc.save_user(admin, uid(), 'tech', 'reset-password-tech-2026', active=False)
@@ -225,4 +231,60 @@ def test_constraints_reject_negative_stock_directly(warehouse):
         with svc.engine.begin() as c:
             c.execute(update(s.parts).where(s.parts.c.id == pid).values(stock=-1))
     assert stock(svc, token, pid) == 5
+
+
+def test_delete_part_blocked_with_history_allowed_when_clean(warehouse):
+    svc, token = warehouse
+    # Deo sa istorijom (kretanje + zalihša) ne može se trajno obrisati.
+    with_history = create_part(svc, token)
+    with pytest.raises(BusinessError, match='istoriju'):
+        svc.delete_part(token, uid(), with_history)
+    # Deo u nalozima isto ne može.
+    ordered = create_part(svc, token, stock=5)
+    svc.issue_order(token, uid(), [{'part_id': ordered, 'quantity': 1}])
+    with pytest.raises(BusinessError, match='istoriju'):
+        svc.delete_part(token, uid(), ordered)
+    # Čist deo bez ikakvog zapisa može se trajno obrisati.
+    clean = svc.save_part(token, uid(), 'CLEAN-PN', 'Čist deo', 'Kat', 0, 0)['id']
+    svc.delete_part(token, uid(), clean)
+    assert clean not in [r['id'] for r in svc.list_parts(token, include_inactive=True)]
+    # Nepostojeći deo je jasna greška.
+    with pytest.raises(BusinessError, match='ne postoji'):
+        svc.delete_part(token, uid(), uid())
+
+
+def test_factory_reset_wipes_business_data_and_keeps_admins(warehouse):
+    svc, token = warehouse
+    svc.save_user(token, uid(), 'tech-reset', 'temporary-reset-pass-2026')
+    tech_token = svc.login('tech-reset', 'temporary-reset-pass-2026')
+    svc.change_password(tech_token, 'temporary-reset-pass-2026', 'new-password-for-tech-2026')
+    tech_token = svc.login('tech-reset', 'new-password-for-tech-2026')
+    pid = create_part(svc, token, stock=3)
+    svc.issue_order(token, uid(), [{'part_id': pid, 'quantity': 1}])
+    with svc.engine.connect() as c:
+        assert c.scalar(select(func.count()).select_from(s.users)) == 2
+    # Pogrešna šifra ne briše ništa.
+    with pytest.raises(BusinessError, match='šifra'):
+        svc.factory_reset(token, uid(), '000000')
+    assert count(svc, s.parts) == 1
+    # Tehnicar ne sme da pokrene reset.
+    with pytest.raises(BusinessError, match='administrator'):
+        svc.factory_reset(tech_token, uid(), '300120')
+    # Ispravna šifra briše poslovne podatke i tehničara, admin i njegova sesija ostaju.
+    svc.factory_reset(token, uid(), '300120')
+    for table in (s.parts, s.movements, s.orders, s.order_items, s.purchases,
+                  s.budgets, s.archive, s.imports, s.operations, s.attempts):
+        assert count(svc, table) == 0, table.name
+    # Revizijski trag sadrži samo sveži događaj factory_reset (upisuje ga _write posle brisanja).
+    with svc.engine.connect() as c:
+        actions = c.scalars(select(s.audit.c.action)).all()
+    assert actions == ['factory_reset']
+    with svc.engine.connect() as c:
+        roles = c.scalars(select(s.users.c.role)).all()
+    assert roles == ['admin']
+    assert svc.actor(token)['username'] == 'admin'
+    with pytest.raises(BusinessError, match='Sesija'):
+        svc.actor(tech_token)
+    with pytest.raises(BusinessError, match='Prijava nije uspela'):
+        svc.login('tech-reset', 'new-password-for-tech-2026')
 

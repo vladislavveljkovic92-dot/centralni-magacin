@@ -81,7 +81,36 @@ Zatim otvorite **http://localhost:8501**. Localni pregled je odvojena kopija pod
 ```
 
 Testovi traže `TEST_DATABASE_URL` (navedena je u `.env`) i traju oko 5 minuta.
-Svih 16 testova mora proći pre nego što se izmene proslede na GitHub.
+Svih 18 testova mora proći pre nego što se izmene proslede na GitHub.
+
+## Uloge i opasne operacije
+
+Postoje dve uloge:
+
+| Uloga | Šta može |
+|---|---|
+| `tehnicar` | Pregled zaliha i izdavanje, unos novih delova u Zalihe. |
+| `admin` | Sve što tehničar + izmena delova, brisanje delova, korisnici, revizijski trag, fabrički reset. |
+
+### Trajno brisanje dela (samo admin)
+
+U delu **Zalihe** postoji proširenje **"Trajno brisanje dela"** (crvena zona).
+Deo se može obrisati **samo ako nema nikakvu istoriju** (kretanja zalihâ, nalozi,
+nabavke) i ako mu je stanje nula. U suprotnom program traži da se deo arhivira.
+Brisanje traži potvrdu u checkboxu i nepovratno je.
+
+### Fabrički reset (samo admin)
+
+U delu **Administracija** postoji proširenje **"Fabrički reset baze"** (crvena zona).
+Reset traži **šifru 300120** i potvrdu u checkboxu, pa trajno briše:
+
+- sve delove, istoriju kretanja, radne naloze i nabavke,
+- budžet i podatke preventivnog održavanja,
+- arhivu i revizijski trag,
+- **sve korisnike osim administratorskih** (tehnici moraju ponovo da se naprave).
+
+Administratorski nalozi i njihove sesije ostaju — admin ne biva odjavljen.
+Nije ga moguće poništiti, zato se prvo napravi backup (vidi gore).
 
 ## Zakazana provera — promena i uklanjanje
 

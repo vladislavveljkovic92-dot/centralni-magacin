@@ -40,7 +40,7 @@ Docker alternativa je u `compose.yaml`. Baza koristi trajni volume i nema objavl
 
 ## Instalacija i administracija
 
-Podržano/testirano okruženje: Python 3.13.14 (lokalno, `pytest` 16/16) i PostgreSQL 17; aplikacija je testirana i na Streamlit Cloud okruženju (Python 3.14). Koristite `requirements.lock.txt` za ponovljivo serversko okruženje.
+Podržano/testirano okruženje: Python 3.13.14 (lokalno, `pytest` 18/18) i PostgreSQL 17; aplikacija je testirana i na Streamlit Cloud okruženju (Python 3.14). Koristite `requirements.lock.txt` za ponovljivo serversko okruženje.
 
 ```powershell
 python -m venv .venv
