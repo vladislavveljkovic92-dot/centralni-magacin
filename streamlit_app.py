@@ -15,6 +15,101 @@ from magacin_backend.service import Warehouse, BusinessError, PERIODS, now, LOCA
 st.set_page_config(page_title='Magacin — centralna evidencija', layout='wide')
 log = logging.getLogger('magacin')
 
+# Vizuelni stil prema referentnoj slici: tamni plavo-indigo gradijent, beli tekst,
+# zlatni akcenti i vrlo zaobljene ("pil") kartice sa tankom zlatnom ivicom.
+STIL = """
+<style>
+/* Pozadina: gradijent tamno plava -> indigo (kao na referentnoj slici) */
+.stApp {
+    background: linear-gradient(135deg, #161A45 0%, #232665 48%, #372E86 100%) !important;
+    background-attachment: fixed !important;
+}
+[data-testid="stHeader"] { background: transparent !important; }
+
+/* Naslovi i tekst: beli, podebljani */
+h1, h2, h3, h4 { color: #FFFFFF !important; font-weight: 800 !important; }
+p { color: #E9EBFA; }
+[data-testid="stWidgetLabel"] p, [role="radiogroup"] label, .stCheckbox label { color: #FFFFFF !important; }
+
+/* Sidebar: tamna kartica sa zlatnom ivicom */
+[data-testid="stSidebar"] {
+    background: rgba(10, 12, 40, 0.88) !important;
+    border-right: 2px solid rgba(214, 178, 94, 0.35) !important;
+}
+[data-testid="stSidebar"] p, [data-testid="stSidebar"] li { color: #E9EBFA !important; }
+[data-testid="stSidebar"] [role="radiogroup"] label {
+    border-radius: 999px !important;
+    padding: 0.25rem 0.8rem !important;
+    transition: background 0.15s ease;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label:hover { background: rgba(214, 178, 94, 0.15); }
+
+/* Dugmad: zlatne kapsule (kao bedzevi 01-05 na slici) */
+.stButton > button, .stFormSubmitButton > button, [data-testid="stDownloadButton"] > button {
+    border-radius: 999px !important;
+    border: 1px solid rgba(15, 18, 55, 0.55) !important;
+    background: linear-gradient(180deg, #E2C274 0%, #C29B45 100%) !important;
+    color: #171A45 !important;
+    font-weight: 700 !important;
+    transition: filter 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+}
+.stButton > button:hover, .stFormSubmitButton > button:hover, [data-testid="stDownloadButton"] > button:hover {
+    filter: brightness(1.07);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
+    transform: translateY(-1px);
+}
+.stButton > button:active, .stFormSubmitButton > button:active { transform: translateY(0); }
+
+/* Polja za unos: svetle kapsule sa zlatnim fokus prstenom */
+.stTextInput input, .stNumberInput input, .stTextArea textarea {
+    border-radius: 999px !important;
+    background: rgba(255, 255, 255, 0.10) !important;
+    border: 1px solid rgba(255, 255, 255, 0.45) !important;
+    color: #FFFFFF !important;
+}
+.stTextArea textarea { border-radius: 20px !important; }
+.stTextInput input::placeholder, .stTextArea textarea::placeholder { color: rgba(233, 235, 250, 0.65) !important; }
+.stTextInput input:focus, .stNumberInput input:focus, .stTextArea textarea:focus {
+    border-color: #D6B25E !important;
+    box-shadow: 0 0 0 3px rgba(214, 178, 94, 0.35) !important;
+}
+[data-baseweb="select"] {
+    border-radius: 999px !important;
+    background: rgba(255, 255, 255, 0.10) !important;
+    border: 1px solid rgba(255, 255, 255, 0.45) !important;
+}
+[data-baseweb="select"] [aria-selected="true"], [data-baseweb="select"] input { color: #FFFFFF !important; }
+[data-baseweb="popover"] ul li { background: #232665 !important; color: #FFFFFF !important; }
+[data-baseweb="popover"] ul li:hover { background: rgba(214, 178, 94, 0.20) !important; }
+
+/* Forme: providne kartice sa zaobljenim uglovima */
+div[data-testid="stForm"] {
+    background: rgba(255, 255, 255, 0.06) !important;
+    border: 1px solid rgba(255, 255, 255, 0.18) !important;
+    border-radius: 28px !important;
+    padding: 1.5rem 1.8rem !important;
+    box-shadow: 0 18px 45px rgba(0, 0, 0, 0.35);
+}
+
+/* Tabele: zaobljene kartice sa zlatnom ivicom */
+div[data-testid="stDataFrame"] {
+    border-radius: 18px !important;
+    overflow: hidden !important;
+    border: 1px solid rgba(214, 178, 94, 0.40) !important;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+}
+
+/* Obavestenja i prosiri: meki zaobljeni uglovi */
+div[data-testid="stAlert"] { border-radius: 18px !important; }
+div[data-testid="stExpander"] details { border-radius: 18px !important; background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.16); }
+div[data-testid="stExpander"] summary { color: #FFFFFF !important; }
+
+/* Razdvajaci i podnaslovi */
+[data-testid="stDivider"] { border-color: rgba(214, 178, 94, 0.35); }
+</style>
+"""
+st.markdown(STIL, unsafe_allow_html=True)
+
 
 @st.cache_resource
 def backend():
@@ -326,6 +421,26 @@ def main():
     token = st.session_state.get('token')
     if not token:
         st.title('Magacin — prijava')
+        # Login kao centralizovana kartica (prema referentnom stilu).
+        st.markdown("""
+        <style>
+        h1 { text-align: center; }
+        div[data-testid="stForm"] {
+            width: min(460px, 92%) !important;
+            max-width: 460px !important;
+            margin: 2rem auto 1rem !important;
+            background: rgba(255, 255, 255, 0.08) !important;
+            border: 1px solid rgba(214, 178, 94, 0.55) !important;
+            box-shadow: 0 28px 70px rgba(0, 0, 0, 0.5);
+        }
+        div[data-testid="stForm"] [data-testid="stFormSubmitButton"],
+        div[data-testid="stForm"] button[data-testid="stFormSubmitButton"] { width: 100% !important; }
+        div[data-testid="stForm"] [data-testid="stFormSubmitButton"] button { width: 100% !important; }
+        div[data-testid="stForm"] [data-testid="stElementContainer"] { width: 100% !important; align-self: stretch !important; }
+        [data-testid="stCaptionContainer"] { text-align: center !important; color: #C9CEF4 !important; }
+        div[data-testid="stButton"] { display: flex; justify-content: center; }
+        </style>
+        """, unsafe_allow_html=True)
         with st.form('login', clear_on_submit=True):
             username = st.text_input('Korisničko ime', max_chars=100)
             password = st.text_input('Lozinka', type='password')

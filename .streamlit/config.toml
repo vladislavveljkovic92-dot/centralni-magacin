@@ -6,3 +6,10 @@ enableCORS = true
 [browser]
 gatherUsageStats = false
 
+# Vizuelni identitet prema referentnoj slici (tamna plavo-indigo paleta sa zlatnim akcentom).
+[theme]
+primaryColor = "#D6B25E"
+backgroundColor = "#1D2052"
+secondaryBackgroundColor = "#2C2F73"
+textColor = "#FFFFFF"
+font = "sans serif"
