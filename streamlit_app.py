@@ -37,12 +37,6 @@ p { color: #E9EBFA; }
     border-right: 2px solid rgba(214, 178, 94, 0.35) !important;
 }
 [data-testid="stSidebar"] p, [data-testid="stSidebar"] li { color: #E9EBFA !important; }
-[data-testid="stSidebar"] [role="radiogroup"] label {
-    border-radius: 999px !important;
-    padding: 0.25rem 0.8rem !important;
-    transition: background 0.15s ease;
-}
-[data-testid="stSidebar"] [role="radiogroup"] label:hover { background: rgba(214, 178, 94, 0.15); }
 
 /* Dugmad: zlatne kapsule (kao bedzevi 01-05 na slici) */
 .stButton > button, .stFormSubmitButton > button, [data-testid="stDownloadButton"] > button {
@@ -106,6 +100,79 @@ div[data-testid="stExpander"] summary { color: #FFFFFF !important; }
 
 /* Razdvajaci i podnaslovi */
 [data-testid="stDivider"] { border-color: rgba(214, 178, 94, 0.35); }
+
+/* ===== GLAVNI MENI: hub krug + linija sa brojevima (kao na referentnoj slici) ===== */
+[data-testid="stSidebar"] .menu-hub {
+    width: 92px; height: 92px; margin: 0.5rem auto 0.4rem;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #2E3380, #14173D);
+    border: 4px solid #D6B25E;
+    box-shadow: 0 0 0 6px rgba(214, 178, 94, 0.16), 0 14px 34px rgba(0, 0, 0, 0.45);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 2.3rem; line-height: 1;
+}
+/* Naslov postaje zlatna "etiketa" ispod huba */
+[data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2 {
+    text-align: center !important;
+    color: #D6B25E !important;
+    font-size: 0.8rem !important;
+    letter-spacing: 0.24em !important;
+    text-transform: uppercase !important;
+    font-weight: 800 !important;
+}
+[data-testid="stSidebar"] p { text-align: center; }
+[data-testid="stSidebar"] div[data-testid="stButton"] { display: flex; justify-content: center; }
+
+/* Vertikalna linija povezivanja: hub -> stavke (ta na slici) */
+[data-testid="stSidebar"] [role="radiogroup"] {
+    counter-reset: nav;
+    position: relative;
+    padding-left: 36px !important;
+    margin-top: 0.5rem !important;
+}
+[data-testid="stSidebar"] [role="radiogroup"]::before {
+    content: '';
+    position: absolute; left: 12px; top: 18px; bottom: 18px; width: 2px;
+    background: linear-gradient(180deg, rgba(214, 178, 94, 0.95), rgba(214, 178, 94, 0.25));
+    border-radius: 2px;
+}
+/* Pil-stavke menija */
+[data-testid="stSidebar"] [role="radiogroup"] label {
+    counter-increment: nav;
+    position: relative;
+    display: flex; align-items: center;
+    border-radius: 999px !important;
+    padding: 0.5rem 1rem 0.5rem 0.8rem !important;
+    margin: 0.4rem 0 !important;
+    background: rgba(255, 255, 255, 0.07) !important;
+    border: 1px solid rgba(255, 255, 255, 0.16) !important;
+    color: #FFFFFF !important;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label:hover {
+    background: rgba(214, 178, 94, 0.14) !important;
+    border-color: rgba(214, 178, 94, 0.5) !important;
+}
+/* Beli kruzic sa brojem postavljen na liniju (kao 1-5 na slici) */
+[data-testid="stSidebar"] [role="radiogroup"] label::before {
+    content: counter(nav);
+    position: absolute; left: -36px; top: 50%; transform: translateY(-50%);
+    width: 26px; height: 26px; border-radius: 50%;
+    background: #FFFFFF; color: #1D2052;
+    font-size: 0.78rem; font-weight: 800;
+    display: flex; align-items: center; justify-content: center;
+    border: 2px solid #D6B25E;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.45);
+}
+/* Izabrana stavka dobija zlatnu nijansu */
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
+    background: linear-gradient(180deg, rgba(214, 178, 94, 0.42), rgba(214, 178, 94, 0.20)) !important;
+    border-color: #D6B25E !important;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked)::before {
+    background: #D6B25E; color: #171A45;
+}
 </style>
 """
 st.markdown(STIL, unsafe_allow_html=True)
@@ -460,6 +527,7 @@ def main():
     except BusinessError:
         st.session_state.clear()
         st.rerun()
+    st.sidebar.markdown('<div class="menu-hub">📦</div>', unsafe_allow_html=True)
     st.sidebar.title('Centralni magacin')
     st.sidebar.write(f'{actor["username"]} · {actor["role"]}')
     if st.sidebar.button('Odjavi se'):
