@@ -25,14 +25,43 @@ def pg_environment(url):
     return env
 
 
+def pronadji_pg_dump(pg_bin=None):
+    """pg_dump sa PUTANJE, ili iz standardne Windows instalacije PostgreSQL-a."""
+    if pg_bin:
+        executable = str(Path(pg_bin) / 'pg_dump')
+    else:
+        executable = shutil.which('pg_dump')
+        if not executable and os.name == 'nt':
+            # Windows često ima PostgreSQL instaliran, ali bin nije na PATH-u.
+            import glob
+            kandidati = sorted(glob.glob(r'C:\Program Files\PostgreSQL\*\bin\pg_dump.exe'))
+            executable = kandidati[-1] if kandidati else None
+    if os.name == 'nt' and executable and not executable.endswith('.exe'):
+        executable += '.exe'
+    return executable
+
+
+def rotiraj_backup_e(folder, keep, obrazac='central_????????T??????Z.dump'):
+    """Zadržava poslednjih `keep` automatskih backupova; stariji se brišu
+    zajedno sa svojim .sha256. Ručni backupi (USB, preview) se ne diraju."""
+    if keep <= 0:
+        return 0
+    folder = Path(folder)
+    fajlovi = sorted(folder.glob(obrazac), key=lambda p: p.stat().st_mtime, reverse=True)
+    obrisano = 0
+    for stari in fajlovi[keep:]:
+        stari.unlink(missing_ok=True)
+        stari.with_suffix(stari.suffix + '.sha256').unlink(missing_ok=True)
+        obrisano += 1
+    return obrisano
+
+
 def create_backup(url, destination, pg_bin=None):
     destination = Path(destination).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
         raise RuntimeError('Backup fajl već postoji; postojeći backup se ne prepisuje.')
-    executable = str(Path(pg_bin) / 'pg_dump') if pg_bin else shutil.which('pg_dump')
-    if os.name == 'nt' and executable and not executable.endswith('.exe'):
-        executable += '.exe'
+    executable = pronadji_pg_dump(pg_bin)
     if not executable:
         raise RuntimeError('Instalirajte PostgreSQL klijentske alate ili navedite --pg-bin.')
     temp = destination.with_suffix(destination.suffix + '.partial')
@@ -54,5 +83,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', default=str(ROOT / 'backups' / f'central_{now():%Y%m%dT%H%M%SZ}.dump'))
     parser.add_argument('--pg-bin')
+    parser.add_argument('--keep', type=int, default=10,
+                        help='Koliko najnovijih automatskih backupova da se zadrži (0 = bez ograničenja).')
     args = parser.parse_args()
-    print(create_backup(database_url(), args.output, args.pg_bin))
+    putanja = create_backup(database_url(), args.output, args.pg_bin)
+    obrisano = rotiraj_backup_e(putanja.parent, args.keep)
+    print(putanja)
+    if obrisano:
+        print(f'Obrisano starijih backupova: {obrisano} (zadržano poslednjih {args.keep})')
