@@ -110,6 +110,19 @@ if (-not $dumps) {
     } else {
         Zapis 'UPOZORENJE' ('Poslednji backup je star ' + $dana + ' dana (' + $poslednji.Name + '). Preporuka: napravi novi backup.')
     }
+    # Svezi backup ako je stariji od 1 dana (bez obzira kako se program otvarao).
+    if ($dana -ge 1 -and (Test-Path $py)) {
+        $out = (& $py -X utf8 (Join-Path $root 'backup_database.py') --keep 10 2>&1 | Out-String)
+        if ($LASTEXITCODE -eq 0) {
+            Zapis 'OK' 'Backup je osvezen (zadrzava se poslednjih 10 snimaka).'
+            $dumps = Get-ChildItem -Path (Join-Path $root 'backups\*.dump') -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending
+        } else {
+            $detalj = ($out -replace '\s+', ' ').Trim()
+            if ($detalj.Length -gt 200) { $detalj = $detalj.Substring(0, 200) + '...' }
+            Zapis 'UPOZORENJE' ('Osvezzavanje backup-a nije uspelo: ' + $detalj)
+        }
+    }
 }
 
 # --- Zakljucak --------------------------------------------------------------
