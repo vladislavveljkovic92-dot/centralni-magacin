@@ -11,8 +11,12 @@ Write-Host 'Pravim prenosni paket...'
 # 1) Cist folder + git trackovani fajlovi (bez .venv, .git, backups...)
 if (Test-Path $paket) { Remove-Item $paket -Recurse -Force }
 New-Item -ItemType Directory -Path $paket | Out-Null
-git -C $root archive --format=tar HEAD | tar -x -C $paket
+$samoGit = Join-Path $env:TEMP 'magacin_git_fajlovi.zip'
+if (Test-Path $samoGit) { Remove-Item $samoGit -Force }
+git -C $root archive --format=zip "--output=$samoGit" HEAD
 if ($LASTEXITCODE -ne 0) { throw 'git archive nije uspeo' }
+Expand-Archive -Path $samoGit -DestinationPath $paket -Force
+Remove-Item $samoGit -Force
 
 # 2) .env (nije u git-u, MORA se preneti rucno)
 Copy-Item (Join-Path $root '.env') $paket -Force
