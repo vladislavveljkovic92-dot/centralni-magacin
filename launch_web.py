@@ -9,6 +9,13 @@ import webbrowser
 
 root = Path(__file__).resolve().parent
 
+# Učitaj .env (MAGACIN_WEB_URL, DATABASE_URL...) ako postoji.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(root / '.env', override=False)
+except Exception:
+    pass
+
 
 def _lokalni_backup():
     """Najpre osveži lokalnu kopiju baze (poslednjih 10 snimaka); neuspjek ne blokira pokretanje."""
