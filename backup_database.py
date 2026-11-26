@@ -31,6 +31,11 @@ def pronadji_pg_dump(pg_bin=None):
         executable = str(Path(pg_bin) / 'pg_dump')
     else:
         executable = shutil.which('pg_dump')
+        if not executable:
+            # Lokalni pg_bin u folderu projekta (prenosi se na novi računar).
+            lokalni = ROOT / 'pg_bin' / ('pg_dump.exe' if os.name == 'nt' else 'pg_dump')
+            if lokalni.exists():
+                executable = str(lokalni)
         if not executable and os.name == 'nt':
             # Windows često ima PostgreSQL instaliran, ali bin nije na PATH-u.
             import glob

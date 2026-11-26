@@ -1,6 +1,6 @@
 @echo off
 title Magacin - Centralna Evidencija
-cd /d "c:\Users\v.veljkovic\Desktop\magacin"
+cd /d "%~dp0"
 
 echo ===================================================
 echo     POKRETANJE APLIKACIJE MAGACIN
@@ -13,10 +13,7 @@ if errorlevel 1 (
     echo     PAZNJA: backup nije napravljen - program se svejedno pokrece.
 )
 echo.
-echo [2/2] Lokalna adresa (ovaj racunar): http://localhost:8501
-echo Mrezna adresa (drugi racunari na istoj mrezi): http://10.9.103.64:8501
-echo.
-echo Otvaram aplikaciju u vasem pretrazivacu...
+echo [2/2] Otvaram aplikaciju u vasem pretrazivacu...
 echo Za zaustavljanje pritisnite Ctrl+C ili zatvorite ovaj prozor.
 echo.
 

@@ -13,6 +13,9 @@ __pycache__/
 *.pyc
 test-results/
 credentials-local.txt
+pg_bin/
+Magacin_prenos/
+Magacin_prenos.zip
 dist/
 backup_original/
 v2/
