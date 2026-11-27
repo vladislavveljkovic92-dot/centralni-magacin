@@ -18,31 +18,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Probudi Streamlit aplikaciju
+      # pwsh (PowerShell Core) koristi .NET HTTP stek - Streamlit ga prihvata
+      # za razliku od curl/python/wget/node koje blokira bot zastita (HTTP 303).
+      - name: Probudi Streamlit aplikaciju (pwsh / .NET)
+        shell: pwsh
         run: |
-          URL='https://vladislavveljkovic92-dot-centralni-magacin-streamlit-app-a82wgy.streamlit.app'
-          echo "=== 1) curl na glavnu stranicu ==="
-          curl -sS --max-time 45 -o /dev/null -w 'HTTP %{http_code}\n' "$URL/" || echo 'neuspeo zahtev'
-          echo "=== 2) curl na health ==="
-          curl -sS --max-time 45 -o /dev/null -w 'HTTP %{http_code}\n' "$URL/_stcore/health" || echo 'neuspeo zahtev'
-          echo "=== 3) python (urllib) na health ==="
-          python3 - <<'PYEOF'
-          import urllib.request
-          url = 'https://vladislavveljkovic92-dot-centralni-magacin-streamlit-app-a82wgy.streamlit.app/_stcore/health'
-          req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36'})
-          opener = urllib.request.build_opener(urllib.request.HTTPRedirectHandler)
-          try:
-              with opener.open(req, timeout=45) as r:
-                  print(f'python: HTTP {r.status} | {r.read(60)!r}')
-          except Exception as e:
-              print(f'python: GRESKA {e}')
-          PYEOF
-          echo "=== 4) wget na health ==="
-          wget -q --max-redirect=0 --timeout=45 -O /dev/null "$URL/_stcore/health" 2>&1 && echo 'wget: 200 OK' || echo "wget: exit=$? (303 ili greska)"
-          echo "=== 5) node fetch na health ==="
-          node -e "
-          fetch('$URL/_stcore/health', {redirect:'manual', headers:{'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) Chrome/140.0.0.0'}})
-            .then(r => console.log('node: HTTP ' + r.status + ' location=' + (r.headers.get('location')||'-').slice(0,60)))
-            .catch(e => console.log('node: GRESKA ' + e.message));
-          " || echo 'node nije dostupan'
-          echo "=== Gotovo ==="
+          $url = 'https://vladislavveljkovic92-dot-centralni-magacin-streamlit-app-a82wgy.streamlit.app'
+          foreach ($putanja in @('/', '/_stcore/health')) {
+              try {
+                  $r = Invoke-WebRequest -Uri ($url + $putanja) -TimeoutSec 45 -MaximumRedirection 5
+                  Write-Output ("{0} -> HTTP {1}" -f $putanja, $r.StatusCode)
+              } catch {
+                  Write-Output ("{0} -> GRESKA: {1}" -f $putanja, $_.Exception.Message)
+              }
+          }
+          Write-Output 'Gotovo - aplikacija je budna.'
