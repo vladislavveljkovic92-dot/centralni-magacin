@@ -37,4 +37,12 @@ jobs:
           except Exception as e:
               print(f'python: GRESKA {e}')
           PYEOF
+          echo "=== 4) wget na health ==="
+          wget -q --max-redirect=0 --timeout=45 -O /dev/null "$URL/_stcore/health" 2>&1 && echo 'wget: 200 OK' || echo "wget: exit=$? (303 ili greska)"
+          echo "=== 5) node fetch na health ==="
+          node -e "
+          fetch('$URL/_stcore/health', {redirect:'manual', headers:{'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) Chrome/140.0.0.0'}})
+            .then(r => console.log('node: HTTP ' + r.status + ' location=' + (r.headers.get('location')||'-').slice(0,60)))
+            .catch(e => console.log('node: GRESKA ' + e.message));
+          " || echo 'node nije dostupan'
           echo "=== Gotovo ==="
