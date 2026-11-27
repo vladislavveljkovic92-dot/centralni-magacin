@@ -1,0 +1,29 @@
+# Odrzava Streamlit aplikaciju budnom: besplatni hosting zaspe posle 12h
+# neaktivnosti, pa bi svako otvaranje cekalo 30-60s budjenja. Ovaj ping
+# svakih 30 min sprecava spavanje - aplikacija se otvara odmah.
+# Javni repozitorijum: GitHub Actions je besplatan (limit 2000 min/mesec,
+# a ovo trosi ~700 min/mesec).
+name: Odrzi aplikaciju budnom
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'  # svakih 30 minuta
+  workflow_dispatch:          # dozvoljava rucno pokretanje (test)
+
+permissions:
+  contents: read
+
+jobs:
+  budi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probudi Streamlit aplikaciju
+        run: |
+          URL='https://vladislavveljkovic92-dot-centralni-magacin-streamlit-app-a82wgy.streamlit.app'
+          echo "Ping: $URL"
+          # Glavna stranica - tera proxy da pokrene aplikaciju
+          curl -sS --max-time 45 -o /dev/null -w 'glavna stranica: HTTP %{http_code}\n' "$URL/" || echo 'glavna: neuspeo zahtev (nastavljam)'
+          # Health endpoint - standardan monitoring za Streamlit
+          curl -sS --max-time 45 -o /dev/null -w 'health: HTTP %{http_code}\n' "$URL/_stcore/health" || echo 'health: neuspeo zahtev (nastavljam)'
+          echo 'Gotovo - aplikacija je budna.'
